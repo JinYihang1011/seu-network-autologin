@@ -30,7 +30,18 @@ from urllib import error as urlerror  # noqa: F401  (保留备用: 捕获 HTTPEr
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def _app_dir() -> str:
+    """程序所在目录。
+
+    打包成 exe（PyInstaller onefile）时 __file__ 指向临时解包目录，
+    而 config.json / login.log 应该跟着 exe 本身走。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _app_dir()
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 DEFAULT_CONFIG = {

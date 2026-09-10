@@ -27,13 +27,30 @@ if (-not (Test-Path -LiteralPath $config)) {
     exit 1
 }
 
-$pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
-if (-not $pythonw) {
-    Write-Host 'ERROR: pythonw.exe not found in PATH. Install Python 3 first.' -ForegroundColor Red
-    exit 1
+# Pick the runner: bundled exe first (no console window for the task), then pythonw + script.
+$consoleExe = Join-Path $base 'seu-autologin.exe'
+$windowExe = Join-Path $base 'seu-autologinw.exe'
+if (Test-Path -LiteralPath $consoleExe) {
+    $bootExecute = $consoleExe
+    $bootArgument = ''
 }
+if (Test-Path -LiteralPath $windowExe) {
+    $logonExecute = $windowExe
+    $logonArgument = ''
+}
+if (-not $bootExecute) {
+    $pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pythonw) {
+        Write-Host 'ERROR: neither seu-autologin.exe nor pythonw.exe is available.' -ForegroundColor Red
+        exit 1
+    }
+    $bootExecute = $logonExecute = $pythonw
+    $bootArgument = $logonArgument = ('-S "{0}"' -f $loginScript)
+}
+Write-Host ('Runner (boot)  : ' + $bootExecute)
+Write-Host ('Runner (logon) : ' + $logonExecute)
 
-$action = New-ScheduledTaskAction -Execute $pythonw -Argument ('-S "{0}"' -f $loginScript) -WorkingDirectory $base
+$action = New-ScheduledTaskAction -Execute $bootExecute -Argument $bootArgument -WorkingDirectory $base
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -Hidden
 $description = 'SEU-ISP auto login'
 
@@ -42,6 +59,9 @@ $bootPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceA
 Register-ScheduledTask -TaskName 'SEU-ISP-AutoLogin-Boot' -Action $action -Trigger $bootTrigger -Settings $settings -Principal $bootPrincipal -Description $description -Force | Out-Null
 Write-Host 'OK   SEU-ISP-AutoLogin-Boot   (at system startup, SYSTEM, works at the lock screen)'
 
+if ($logonExecute -ne $bootExecute) {
+    $action = New-ScheduledTaskAction -Execute $logonExecute -Argument $logonArgument -WorkingDirectory $base
+}
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15) -RepetitionInterval (New-TimeSpan -Minutes 15)
 $userPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited

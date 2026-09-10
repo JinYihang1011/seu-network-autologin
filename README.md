@@ -69,6 +69,22 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 ## 安装
 
+### 方式一：下载打包好的 exe（不用装 Python）
+
+1. 到 [Releases](https://github.com/JinYihang1011/seu-network-autologin/releases/latest) 下载
+   `seu-autologin-windows-x64.zip`，解压到**一个固定目录**（例如 `D:\seu-autologin`）——
+   `config.json` 和 `login.log` 都放在 exe 旁边，别放会被清理的临时目录
+2. 把 `config.example.json` 复制成 `config.json`，填好账号密码
+3. 双击 `seu-autologin.exe`（或命令行 `seu-autologin.exe --once`）试跑一次，
+   看到 `认证完成，外网已连通` 就对了
+4. 双击 `install_tasks.cmd`（UAC 选「是」）注册计划任务 —— 它会自动优先用同目录的 exe
+
+包里有控制台版 `seu-autologin.exe`（手动运行看输出）和无窗口版 `seu-autologinw.exe`
+（计划任务用，不闪窗口）。未签名的 exe 首次运行会弹 SmartScreen「未知发布者」，
+点「更多信息 → 仍要运行」即可。
+
+### 方式二：直接用 Python 脚本
+
 ```powershell
 git clone https://github.com/JinYihang1011/seu-network-autologin.git
 cd seu-network-autologin
@@ -77,7 +93,7 @@ notepad config.json                 # 填 account / password / isp_suffix
 python seu_isp_login.py --once      # 先手动跑一次，确认能认证成功
 ```
 
-确认没问题后，双击 `install_tasks.cmd`（会弹 UAC，选「是」），它会注册两个计划任务：
+然后同样双击 `install_tasks.cmd`（会弹 UAC，选「是」）注册计划任务：
 
 | 任务名 | 触发条件 | 运行身份 |
 | --- | --- | --- |
@@ -126,6 +142,7 @@ config.example.json     配置模板，复制成 config.json 后填自己的账�
 logout.py               把本机踢下线，用来测试自动登录
 install_tasks.ps1       注册两个计划任务（需管理员）
 install_tasks.cmd       双击即可（自动提权）
+build_exe.ps1           用 PyInstaller 自己打包 exe
 LICENSE                 MIT
 ```
 

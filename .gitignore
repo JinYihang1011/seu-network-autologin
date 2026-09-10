@@ -3,3 +3,6 @@ login.log
 login.lock
 __pycache__/
 *.pyc
+build/
+dist/
+*.spec
