@@ -64,9 +64,18 @@ if ($logonExecute -ne $bootExecute) {
 }
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15) -RepetitionInterval (New-TimeSpan -Minutes 15)
+
+# Extra trigger: right after the network changes (WiFi switch / reconnect). 5 second delay so
+# DHCP/DNS settle a bit first. Requires the NetworkProfile operational log (enabled by default).
+$subscription = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[Provider[@Name=''Microsoft-Windows-NetworkProfile''] and EventID=10000]]</Select></Query></QueryList>'
+$eventTrigger = New-CimInstance -CimClass (Get-CimClass -Namespace Root/Microsoft/Windows/TaskScheduler -ClassName MSFT_TaskEventTrigger) -ClientOnly
+$eventTrigger.Enabled = $true
+$eventTrigger.Subscription = $subscription
+$eventTrigger.Delay = 'PT5S'
+
 $userPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName 'SEU-ISP-AutoLogin' -Action $action -Trigger $logonTrigger, $repeatTrigger -Settings $settings -Principal $userPrincipal -Description $description -Force | Out-Null
-Write-Host 'OK   SEU-ISP-AutoLogin        (at user logon + every 15 minutes)'
+Register-ScheduledTask -TaskName 'SEU-ISP-AutoLogin' -Action $action -Trigger $logonTrigger, $repeatTrigger, $eventTrigger -Settings $settings -Principal $userPrincipal -Description $description -Force | Out-Null
+Write-Host 'OK   SEU-ISP-AutoLogin        (at logon + every 15 min + right after the network changes)'
 
 Write-Host ''
 Write-Host ('Log file : ' + (Join-Path $base 'login.log'))

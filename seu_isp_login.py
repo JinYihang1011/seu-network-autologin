@@ -567,12 +567,99 @@ def nudge_wifi(cfg: dict, waited: float, last_nudge: list, ssids: list) -> None:
         log(cfg, "    主动连接无线网络 %s：%s" % (ssid, output or "（无输出）"))
 
 
+CARRIERS = {
+    "1": ("@cmcc", "运营商宽带（中国移动）"),
+    "2": ("@dx", "运营商宽带（中国电信）"),
+    "3": ("@lt", "运营商宽带（中国联通）"),
+}
+
+WIZARD_CONFIG = """{
+  // 本文件由首次运行向导生成，可以直接改；支持 // 注释
+  "account": "%(account)s",     // 一卡通号
+  "password": "%(password)s",   // 宽带（SEU-ISP）密码
+  "profiles": [
+    {
+      "ssid": "SEU-ISP",
+      "isp_suffix": "%(suffix)s",
+      "account": "",
+      "password": "",
+      "note": "%(note)s"
+    },
+    {
+      "ssid": "SEU-WLAN",
+      "isp_suffix": "@xyw",
+      "account": "",
+      "password": "%(wlan_password)s",
+      "note": "校园网（校园用户）"
+    }
+  ],
+  "portal_urls": ["http://w.seu.edu.cn/", "http://10.80.128.2/", "http://10.9.10.100/"],
+  "wifi_nudge": true,
+  "wifi_ssid": "SEU-ISP",
+  "wifi_interface": "WLAN",
+  "log_file": "login.log"
+}
+"""
+
+
+def has_credentials(cfg: dict) -> bool:
+    if not str(cfg.get("account") or "").strip():
+        return False
+    if str(cfg.get("password") or "").strip():
+        return True
+    return any(str(item.get("password") or "").strip() for item in (cfg.get("profiles") or []))
+
+
+def first_run_wizard(force: bool = False) -> bool:
+    """没有可用配置时，在控制台问几个问题并生成 config.json。"""
+    if not force and not (sys.stdin and sys.stdout and sys.stdout.isatty()):
+        return False  # 无窗口 exe / 计划任务里不提问
+    print()
+    print("=" * 64)
+    print(" 没有找到可用的 config.json，先做一次初始化（直接回车用括号里的默认值）")
+    print("=" * 64)
+    try:
+        account = ""
+        while not account:
+            account = input(" 1/4 一卡通号（登录校园网时输入的那个号）：").strip()
+        password = input(" 2/4 宽带密码（SEU-ISP，没有就回车跳过）：").strip()
+        wlan_password = input(" 3/4 校园网密码（SEU-WLAN，和上面一样就回车）：").strip() or password
+        choice = input(" 4/4 运营商 1=中国移动 2=中国电信 3=中国联通（默认 1）：").strip() or "1"
+    except (EOFError, KeyboardInterrupt):
+        print("\n 已取消。")
+        return False
+    suffix, note = CARRIERS.get(choice, CARRIERS["1"])
+    text = WIZARD_CONFIG % {
+        "account": account,
+        "password": password,
+        "suffix": suffix,
+        "note": note,
+        "wlan_password": wlan_password,
+    }
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError as exc:
+        print(" 写配置文件失败：%s" % exc)
+        return False
+    print("\n 已保存配置：%s" % CONFIG_PATH)
+    print(" 接下来自动试一次认证，结果会打印在下面。\n")
+    return True
+
+
 def main(argv) -> int:
     cfg = load_config()
     if cfg.get("_config_error"):
         log(cfg, "读取 config.json 出错：%s" % cfg["_config_error"])
+    if "--init" in argv:
+        first_run_wizard(force=True)
+        cfg = load_config()
+    elif not has_credentials(cfg):
+        if first_run_wizard():
+            cfg = load_config()
     if not cfg.get("account") or not cfg.get("password"):
-        log(cfg, "配置不完整：account 或 password 为空，请检查 config.json")
+        log(cfg, "配置不完整：account 或 password 为空。双击 1-首次配置并测试.cmd，"
+                 "或运行 %s --init，按提示填一次即可" % os.path.basename(sys.executable or "seu-autologin.exe"))
         return 3
 
     lock = acquire_lock(cfg)
@@ -677,5 +764,18 @@ def main(argv) -> int:
         release_lock(lock)
 
 
+def wait_for_enter() -> None:
+    """双击 .cmd 运行时，让窗口停住等用户看完结果（计划任务里不会触发）。"""
+    try:
+        if sys.stdin and sys.stdout and sys.stdout.isatty():
+            input("\n按回车键关闭窗口...")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    args = sys.argv[1:]
+    code = main(args)
+    if "--pause" in args:
+        wait_for_enter()
+    sys.exit(code)

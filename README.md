@@ -107,19 +107,19 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 ## 安装
 
-### 方式一：下载打包好的 exe（不用装 Python）
+### 方式一：下载打包好的 exe（不用装 Python，推荐）
 
 1. 到 [Releases](https://github.com/JinYihang1011/seu-network-autologin/releases/latest) 下载
    `seu-autologin-windows-x64.zip`，解压到**一个固定目录**（例如 `D:\seu-autologin`）——
    `config.json` 和 `login.log` 都放在 exe 旁边，别放会被清理的临时目录
-2. 把 `config.example.json` 复制成 `config.json`，填好账号密码
-3. 双击 `seu-autologin.exe`（或命令行 `seu-autologin.exe --once`）试跑一次，
-   看到 `认证完成，外网已连通` 就对了
-4. 双击 `install_tasks.cmd`（UAC 选「是」）注册计划任务 —— 它会自动优先用同目录的 exe
+2. **双击 `1-首次配置并测试.cmd`**：第一次运行会问你「一卡通号 / 宽带密码 / 校园网密码 / 运营商」，
+   自动生成 `config.json` 并立刻试一次认证；看到「认证完成，外网已连通」就成了
+3. **双击 `2-安装开机自启.cmd`**（UAC 点「是」）：装好后开机、登录、**切换网络**都会自动认证
+4. 出问题就打开同目录的 `login.log`；包里的 `使用说明.txt` 是同样步骤（写给不用命令行的人）
 
-包里有控制台版 `seu-autologin.exe`（手动运行看输出）和无窗口版 `seu-autologinw.exe`
-（计划任务用，不闪窗口）。未签名的 exe 首次运行会弹 SmartScreen「未知发布者」，
-点「更多信息 → 仍要运行」即可。
+两个 exe 的区别：`seu-autologin.exe` 带控制台（手动运行能看到输出），`seu-autologinw.exe` 无窗口
+（计划任务用，不闪黑框）。命令行等价写法：`seu-autologin.exe --once`、`seu-autologin.exe --init`。
+未签名的 exe 首次运行会弹 SmartScreen「未知发布者」，点「更多信息 → 仍要运行」即可。
 
 ### 方式二：直接用 Python 脚本
 
@@ -136,7 +136,7 @@ python seu_isp_login.py --once      # 先手动跑一次，确认能认证成功
 | 任务名 | 触发条件 | 运行身份 |
 | --- | --- | --- |
 | `SEU-ISP-AutoLogin-Boot` | 系统启动时（锁屏阶段） | SYSTEM / 最高权限 |
-| `SEU-ISP-AutoLogin` | 用户登录后立即 + 每 15 分钟 | 当前用户 / 普通权限 |
+| `SEU-ISP-AutoLogin` | 用户登录后立即 + 每 15 分钟 + **网络变化后约 5 秒** | 当前用户 / 普通权限 |
 
 > Windows 的「快速启动」开启时，「关机再开机」其实是从休眠恢复，不会触发开机触发器，
 > 这时由登录任务接上；真正的「重启」才走 Boot 任务。两个任务合起来覆盖各种情况。
@@ -178,6 +178,9 @@ python seu_isp_login.py --once   # 跑一次认证
 ```
 seu_isp_login.py        主脚本（Python 3 标准库，无第三方依赖）
 config.example.json     配置模板，复制成 config.json 后填自己的账号密码
+1-首次配置并测试.cmd    首次运行向导 + 试认证（双击即可）
+2-安装开机自启.cmd      注册计划任务（双击，会自动提权）
+使用说明.txt            给不用命令行的人看的三步说明
 logout.py               把本机踢下线，用来测试自动登录
 install_tasks.ps1       注册两个计划任务（需管理员）
 install_tasks.cmd       双击即可（自动提权）
