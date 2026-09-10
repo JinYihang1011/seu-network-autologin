@@ -571,35 +571,38 @@ def nudge_wifi(cfg: dict, waited: float, last_nudge: list, ssids: list) -> None:
 
 
 CARRIERS = {
-    "1": ("@cmcc", "运营商宽带（中国移动）"),
-    "2": ("@dx", "运营商宽带（中国电信）"),
-    "3": ("@lt", "运营商宽带（中国联通）"),
+    "1": ("@cmcc", "中国移动"),
+    "2": ("@dx", "中国电信"),
+    "3": ("@lt", "中国联通"),
 }
+
+WIZARD_PROFILE_WLAN = """    {
+      "ssid": "SEU-WLAN",         // 校园网：平时连的多数是这个
+      "account_prefix": ",0,",    // 校园网的账号要带这个前缀、且不带后缀（实测）
+      "isp_suffix": "",
+      "account": "",              // 留空 = 用上面的 account
+      "password": "",             // 留空 = 用上面的 password
+      "note": "校园网"
+    }"""
+
+WIZARD_PROFILE_ISP = """    {
+      "ssid": "SEU-ISP",          // 运营商宽带；没有的话这条可以删掉
+      "isp_suffix": "%(suffix)s", %(comment)s
+      "account": "",
+      "password": "",             // 校园网和宽带密码不一样时，填这里
+      "note": "%(note)s"
+    }"""
 
 WIZARD_CONFIG = """{
   // 本文件由首次运行向导生成，可以直接改；支持 // 注释
-  "account": "%(account)s",     // 一卡通号
-  "password": "%(password)s",   // 宽带（SEU-ISP）密码
+  "account": "%(account)s",     // 一卡通
+  "password": "%(password)s",   // 密码（校园网 / 宽带同一个）
   "profiles": [
-    {
-      "ssid": "SEU-ISP",
-      "isp_suffix": "%(suffix)s",
-      "account": "",
-      "password": "",
-      "note": "%(note)s"
-    },
-    {
-      "ssid": "SEU-WLAN",
-      "account_prefix": ",0,",
-      "isp_suffix": "",
-      "account": "",
-      "password": "%(wlan_password)s",
-      "note": "校园网（校园用户）"
-    }
+%(profiles)s
   ],
   "portal_urls": ["http://w.seu.edu.cn/", "http://10.80.128.2/", "http://10.9.10.100/"],
   "wifi_nudge": true,
-  "wifi_ssid": "SEU-ISP",
+  "wifi_ssid": "SEU-WLAN",
   "wifi_interface": "WLAN",
   "log_file": "login.log"
 }
@@ -620,25 +623,36 @@ def first_run_wizard(force: bool = False) -> bool:
         return False  # 无窗口 exe / 计划任务里不提问
     print()
     print("=" * 64)
-    print(" 没有找到可用的 config.json，先做一次初始化（直接回车用括号里的默认值）")
+    print(" 第一次运行，回答三个问题就能用了（直接回车 = 用方括号里的默认值）")
     print("=" * 64)
     try:
         account = ""
         while not account:
-            account = input(" 1/4 一卡通号（登录校园网时输入的那个号）：").strip()
-        password = input(" 2/4 宽带密码（SEU-ISP，没有就回车跳过）：").strip()
-        wlan_password = input(" 3/4 校园网密码（SEU-WLAN，和上面一样就回车）：").strip() or password
-        choice = input(" 4/4 运营商 1=中国移动 2=中国电信 3=中国联通（默认 1）：").strip() or "1"
+            account = input(" 1/3 一卡通：").strip()
+        password = input(" 2/3 密码（校园网和宽带是同一个）：").strip()
+        print(" 3/3 有没有运营商宽带（SEU-ISP）？")
+        print("      1 = 中国移动    2 = 中国电信    3 = 中国联通")
+        print("      直接回车 = 没有，只用校园网")
+        choice = input("      [回车 = 没有]：").strip()
     except (EOFError, KeyboardInterrupt):
         print("\n 已取消。")
         return False
-    suffix, note = CARRIERS.get(choice, CARRIERS["1"])
+
+    if choice in CARRIERS:
+        suffix, carrier = CARRIERS[choice]
+        isp_comment = "// 移动 @cmcc / 电信 @dx / 联通 @lt"
+        isp_note = "运营商宽带（%s）" % carrier
+    else:
+        suffix, carrier = CARRIERS["1"]
+        isp_comment = "// 没有运营商宽带的话，这条可以不管或删掉"
+        isp_note = "没有运营商宽带（可删）"
+    profiles = WIZARD_PROFILE_WLAN + ",\n" + WIZARD_PROFILE_ISP % {
+        "suffix": suffix, "carrier": carrier, "comment": isp_comment, "note": isp_note,
+    }
     text = WIZARD_CONFIG % {
         "account": account,
         "password": password,
-        "suffix": suffix,
-        "note": note,
-        "wlan_password": wlan_password,
+        "profiles": profiles,
     }
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
@@ -647,6 +661,7 @@ def first_run_wizard(force: bool = False) -> bool:
         print(" 写配置文件失败：%s" % exc)
         return False
     print("\n 已保存配置：%s" % CONFIG_PATH)
+    print(" 提示：校园网和宽带的密码不一样时，之后打开 config.json 改 SEU-ISP 那条的 password。")
     print(" 接下来自动试一次认证，结果会打印在下面。\n")
     return True
 

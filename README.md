@@ -28,8 +28,8 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 后缀来自门户自己下发的服务类型列表。`config.json` 的 `profiles` 里按 SSID 写好即可，
 连上哪个网络就用哪一份（没匹配到时用顶层的 `account` / `password` / `isp_suffix`）。
-**两个网络的密码通常不一样**（校园网多用统一身份认证 / 一卡通查询密码），在对应 profile 里单独写
-`password` 即可，留空则用顶层那个 —— 详见下面的「配置文件怎么填」。
+两个网络**一般用同一个密码**；万一不一样，在对应 profile 里单独写 `password` 即可，
+留空则用顶层那个 —— 详见下面的「配置文件怎么填」。
 
 ## 配置文件怎么填
 
@@ -38,23 +38,23 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 ```jsonc
 {
-  "account": "一卡通号",     // ← 登录校园网时输的那个号（一卡通号，不是学号）
-  "password": "宽带密码",    // ← SEU-ISP（中国移动/电信/联通宽带）的密码
+  "account": "一卡通号",     // ← 登录校园网时输的那个号
+  "password": "密码",        // ← 校园网和宽带是同一个密码
   "profiles": [
     {
-      "ssid": "SEU-ISP",      // 电脑连着这个 WiFi 时用这一份
-      "isp_suffix": "@cmcc",  // 服务类型：移动 @cmcc、电信 @dx、联通 @lt
-      "account": "",          // 留空 = 用上面的 account
-      "password": "",         // 留空 = 用上面的 password
-      "note": "运营商宽带（中国移动）"
-    },
-    {
-      "ssid": "SEU-WLAN",      // 连校园网时用这一份
+      "ssid": "SEU-WLAN",      // 校园网：平时连的多数是这个
       "account_prefix": ",0,", // 校园网实测要这个前缀
       "isp_suffix": "",        // 且不带后缀
+      "account": "",           // 留空 = 用上面的 account
+      "password": "",          // 留空 = 用上面的 password
+      "note": "校园网"
+    },
+    {
+      "ssid": "SEU-ISP",       // 运营商宽带（没有的话这条可删）
+      "isp_suffix": "@cmcc",   // 移动 @cmcc、电信 @dx、联通 @lt
       "account": "",
-      "password": "",         // ★ 校园网密码常与宽带不同，填这里
-      "note": "校园网（校园用户）"
+      "password": "",          // 校园网和宽带密码不一样时填这里
+      "note": "运营商宽带（中国移动）"
     }
   ]
 }
@@ -66,8 +66,8 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
   然后退回用顶层默认后缀 —— 这时很容易出现「后缀对不上、认证被拒」。
 - **`account_prefix`**：最终提交的账号 = `前缀 + 账号 + 后缀`。SEU-WLAN 实测要用 `,0,` 前缀、后缀留空。
 - **`password` 留空就用顶层那个**，写 `""` 和删掉这一行等价。
-- **校园网密码 ≠ 宽带密码**：填错时门户返回 `Authentication fail`，日志会写成
-  `认证被拒绝（Authentication fail）`，脚本会立刻停下并提示，不会傻重试。
+- 密码填错时门户返回 `Authentication fail`，日志会写成 `认证被拒绝（Authentication fail）`，
+  脚本会立刻停下并提示，不会傻重试。
 - 其余参数（接口地址、超时、重试节奏、日志大小、没网时催连 WiFi 等）示例文件里逐条都有注释，一般不用动。
 
 ## 原理

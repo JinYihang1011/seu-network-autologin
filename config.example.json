@@ -15,22 +15,21 @@
   // 电脑连着哪个 WiFi 就用哪一份；都没匹配上时，用上面的 account / password / isp_suffix
   "profiles": [
     {
-      // ssid 要和 Windows 里显示的无线网络名一致（大小写无所谓）
-      "ssid": "SEU-ISP",
-      // 服务类型后缀：中国移动 @cmcc、中国电信 @dx、中国联通 @lt、校园网（校园用户）@xyw
-      "isp_suffix": "@cmcc",
-      "account": "",                // 留空 = 用上面的 account
-      "password": "",               // 留空 = 用上面的 password
-      "note": "运营商宽带（中国移动）"
-    },
-    {
-      // SEU-WLAN 的账号格式实测是 ",0,一卡通号"（无感知认证前缀，且不带服务类型后缀）
+      // 校园网：平时连的多数是这个。账号要带 ",0," 前缀且不带后缀（实测）
       "ssid": "SEU-WLAN",
       "account_prefix": ",0,",
       "isp_suffix": "",
+      "account": "",                // 留空 = 用上面的 account
+      "password": "",               // 留空 = 用上面的 password
+      "note": "校园网"
+    },
+    {
+      // 运营商宽带；没有的话这条可以删掉。ssid 要和 Windows 里显示的无线网络名一致
+      "ssid": "SEU-ISP",
+      "isp_suffix": "@cmcc",        // 移动 @cmcc / 电信 @dx / 联通 @lt
       "account": "",
-      "password": "",               // ★ 校园网密码通常和宽带密码不同（常为统一身份认证 / 一卡通查询密码），填这里
-      "note": "校园网（校园用户）"
+      "password": "",               // 校园网和宽带密码不一样时填这里
+      "note": "运营商宽带（中国移动）"
     }
   ],
 
