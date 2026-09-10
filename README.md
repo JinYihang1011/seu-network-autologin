@@ -27,7 +27,45 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 后缀来自门户自己下发的服务类型列表。`config.json` 的 `profiles` 里按 SSID 写好即可，
 连上哪个网络就用哪一份（没匹配到时用顶层的 `account` / `password` / `isp_suffix`）。
-如果两个网络的密码不同（校园网常用统一身份认证密码），在对应 profile 里单独写 `password`。
+**两个网络的密码通常不一样**（校园网多用统一身份认证 / 一卡通查询密码），在对应 profile 里单独写
+`password` 即可，留空则用顶层那个 —— 详见下面的「配置文件怎么填」。
+
+## 配置文件怎么填
+
+`config.json` **支持 `//` 和 `/* */` 注释**：程序会先剥掉注释再解析，所以你可以直接在文件里写备注。
+放哪儿：和 exe（或 `seu_isp_login.py`）放在同一个目录，`login.log` 也会生成在那里。
+
+```jsonc
+{
+  "account": "一卡通号",     // ← 登录校园网时输的那个号（一卡通号，不是学号）
+  "password": "宽带密码",    // ← SEU-ISP（中国移动/电信/联通宽带）的密码
+  "profiles": [
+    {
+      "ssid": "SEU-ISP",      // 电脑连着这个 WiFi 时用这一份
+      "isp_suffix": "@cmcc",  // 服务类型：移动 @cmcc、电信 @dx、联通 @lt
+      "account": "",          // 留空 = 用上面的 account
+      "password": "",         // 留空 = 用上面的 password
+      "note": "运营商宽带（中国移动）"
+    },
+    {
+      "ssid": "SEU-WLAN",     // 连校园网时用这一份
+      "isp_suffix": "@xyw",   // 校园网 = 校园用户
+      "account": "",
+      "password": "",         // ★ 校园网密码常与宽带不同，填这里
+      "note": "校园网（校园用户）"
+    }
+  ]
+}
+```
+
+几个要点：
+
+- **`ssid` 必须和 Windows 里显示的无线网络名一致**（大小写无所谓）。写错时日志会显示 `网络 未识别`，
+  然后退回用顶层默认后缀 —— 这时很容易出现「后缀对不上、认证被拒」。
+- **`password` 留空就用顶层那个**，写 `""` 和删掉这一行等价。
+- **校园网密码 ≠ 宽带密码**：填错时门户返回 `Authentication fail`，日志会写成
+  `认证被拒绝（Authentication fail）`，脚本会立刻停下并提示，不会傻重试。
+- 其余参数（接口地址、超时、重试节奏、日志大小、没网时催连 WiFi 等）示例文件里逐条都有注释，一般不用动。
 
 ## 原理
 
@@ -43,7 +81,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 | 参数 | 说明 |
 | --- | --- |
 | `login_method` | `1`（PORTAL 协议） |
-| `user_account` | `<学号>@cmcc` / `<学号>@xyw`（见上表） |
+| `user_account` | `<一卡通号>@cmcc` / `<一卡通号>@xyw`（见上表） |
 | `user_password` | 密码 |
 | `wlan_user_ip` | 本机 IP，脚本自动获取 |
 | `jsVersion` | `1.0` |
@@ -122,7 +160,8 @@ python seu_isp_login.py --once   # 跑一次认证
 
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
-| `account` / `password` | — | 默认账号密码（被 profile 覆盖） |
+| `account` | — | **一卡通号**（登录校园网时输的那个号，不是学号） |
+| `password` | — | 默认密码（被 profile 覆盖）；校园网和宽带的密码通常不同 |
 | `isp_suffix` | `@cmcc` | 默认运营商后缀 |
 | `profiles` | SEU-ISP→`@cmcc`、SEU-WLAN→`@xyw` | 按 SSID 的配置，可各自写 `account` / `password` / `isp_suffix` |
 | `login_mode` | `auto` | `auto` = 先 PORTAL 协议，失败再回退本地认证；也可强制 `portal` / `drcom` |

@@ -19,6 +19,7 @@ SEU-ISP 校园网自动登录脚本（东南大学运营商宽带，Drcom 认证
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -103,6 +104,9 @@ AUTH_FAIL_KEYS = (
     "usernotexist",
     "notexist",
     "error",
+    "authentication fail",
+    "auth fail",
+    "denied",
     "认证失败",
     "密码错误",
     "账号或密码",
@@ -116,12 +120,53 @@ def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8-sig") as handle:
-            cfg.update(json.load(handle))
+            raw = handle.read()
+        cfg.update(json.loads(strip_json_comments(raw)))
     except FileNotFoundError:
         pass
     except Exception as exc:  # 配置坏了也要能记日志说明原因
         cfg["_config_error"] = "%s: %s" % (exc.__class__.__name__, exc)
     return cfg
+
+
+def strip_json_comments(text: str) -> str:
+    """允许在 config.json 里写 // 和 /* */ 注释（JSONC 风格），字符串里的 // 不受影响。"""
+    out = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            index += 2
+            while index < length and text[index] not in "\r\n":
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            index += 2
+            while index + 1 < length and not (text[index] == "*" and text[index + 1] == "/"):
+                index += 1
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def log(cfg: dict, message: str) -> None:
@@ -393,7 +438,7 @@ def login_candidates(cfg: dict, ip: str, portal_base: str, creds: dict, ssid: st
     # 门户不挂在 w.seu.edu.cn 时（东大其他网段），按探测到的地址推一个 eportal 入口再试一次
     derived = portal_base_from(portal_base)
     configured = (cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"]).rstrip("/")
-    if derived and derived.rstrip("/") != configured:
+    if derived and not same_host(derived, configured):
         candidates.append((build_portal_login_url(cfg, ip, creds, derived),
                            "PORTAL 协议（按探测地址推导 %s）" % derived))
     return candidates
@@ -406,6 +451,15 @@ def portal_base_from(discovered: str) -> str:
     if not host:
         return ""
     return "%s://%s/eportal/" % (parts.scheme or "http", host)
+
+
+def same_host(url_a: str, url_b: str) -> bool:
+    """只比较主机名：端口/协议不同（如 :801 https）不算不同门户。"""
+    try:
+        return (urlparse.urlsplit(url_a).hostname or "").lower() == \
+               (urlparse.urlsplit(url_b).hostname or "").lower()
+    except Exception:
+        return False
 
 
 def classify(body_text: str):
@@ -423,8 +477,8 @@ def classify(body_text: str):
         return "unknown", match.group(0)[:120], None
 
     result = str(data.get("result"))
-    msg = str(data.get("msg") or "")
-    msga = str(data.get("msga") or "")
+    msg = decode_portal_text(str(data.get("msg") or ""))
+    msga = decode_portal_text(str(data.get("msga") or ""))
     ret_code = data.get("ret_code")
     text = (msg + " " + msga).lower()
 
@@ -436,6 +490,19 @@ def classify(body_text: str):
         if key in text:
             return "authfail", msg or msga, data
     return "unknown", msg or msga or ("ret_code=%s" % ret_code), data
+
+
+def decode_portal_text(value: str) -> str:
+    """门户有时把提示用 base64 返回，例如 QXV0aGVudGljYXRpb24gZmFpbA== → Authentication fail。"""
+    text = (value or "").strip()
+    if len(text) >= 8 and len(text) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", text):
+        try:
+            decoded = base64.b64decode(text).decode("utf-8").strip()
+            if decoded and decoded.isprintable() and any(char.isalnum() for char in decoded):
+                return decoded
+        except Exception:
+            pass
+    return text
 
 
 def connectivity_ok(cfg: dict, timeout: float):

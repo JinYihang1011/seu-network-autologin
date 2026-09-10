@@ -1,36 +1,77 @@
 {
-  "account": "你的学号",
-  "password": "你的密码",
-  "isp_suffix": "@cmcc",
+  // ==========================================================================
+  //  SEU 校园网自动登录 —— 配置文件
+  //
+  //  * 本文件支持 // 和 /* */ 注释（标准 JSON 不允许，本程序会先剥掉注释再解析）
+  //  * 改完立即生效，不用重启；计划任务每次运行都会重新读这个文件
+  //  * 填好后把文件名从 config.example.json 改成 config.json（放在 exe 或脚本旁边）
+  // ==========================================================================
+
+  // ---------- 账号与密码（必填）----------
+  "account": "一卡通号",            // 登录校园网时输入的那个号（是"一卡通"号，不是学号）
+  "password": "宽带密码",           // SEU-ISP（运营商宽带）的密码；校园网密码不同的话写在下面 profiles 里
+
+  // ---------- 按无线网络分别配置 ----------
+  // 电脑连着哪个 WiFi 就用哪一份；都没匹配上时，用上面的 account / password / isp_suffix
   "profiles": [
-    { "ssid": "SEU-ISP", "isp_suffix": "@cmcc", "note": "运营商宽带（中国移动）" },
-    { "ssid": "SEU-WLAN", "isp_suffix": "@xyw", "note": "校园网（校园用户）" }
+    {
+      // ssid 要和 Windows 里显示的无线网络名一致（大小写无所谓）
+      "ssid": "SEU-ISP",
+      // 服务类型后缀：中国移动 @cmcc、中国电信 @dx、中国联通 @lt、校园网（校园用户）@xyw
+      "isp_suffix": "@cmcc",
+      "account": "",                // 留空 = 用上面的 account
+      "password": "",               // 留空 = 用上面的 password
+      "note": "运营商宽带（中国移动）"
+    },
+    {
+      "ssid": "SEU-WLAN",
+      "isp_suffix": "@xyw",
+      "account": "",
+      "password": "",               // ★ 校园网密码通常和宽带密码不同（常为统一身份认证 / 一卡通查询密码），填这里
+      "note": "校园网（校园用户）"
+    }
   ],
+
+  // ---------- 下面这些一般不用改 ----------
+
+  // 登录协议：auto = 先试 PORTAL 协议（eportal），失败再回退本地认证；也可强制 "portal" / "drcom"
   "login_mode": "auto",
+
+  // 认证接口。东南大学用的是 eportal 的 PORTAL 协议
   "portal_login_base": "https://w.seu.edu.cn:801/eportal/",
   "portal_login_method": 1,
   "js_version": "1.0",
+  "portal_host_header": "w.seu.edu.cn",
+  "login_path": "/drcom/login",
+
+  // 探测认证门户用的地址。东大不同网段门户 IP 不一样，按顺序试，谁返回 Dr.COM 页面就用谁
   "portal_urls": [
     "http://w.seu.edu.cn/",
     "http://10.80.128.2/",
     "http://10.9.10.100/"
   ],
-  "portal_host_header": "w.seu.edu.cn",
-  "login_path": "/drcom/login",
+
+  // 认证是否成功以"真实外网通不通"为准：未认证时这个请求会被门户劫持成登录页，内容就对不上
   "connectivity_check_url": "http://www.msftconnecttest.com/connecttest.txt",
   "connectivity_expect": "Microsoft Connect Test",
   "connectivity_grace_seconds": 2,
   "connectivity_attempts": 3,
-  "request_timeout_seconds": 4,
-  "login_timeout_seconds": 12,
-  "retry_interval_seconds": 10,
-  "fast_retry_seconds": 2,
-  "fast_retry_window_seconds": 120,
-  "max_wait_seconds": 300,
+
+  // 超时与重试节奏（秒）
+  "request_timeout_seconds": 4,      // 探测门户 / 外网校验的超时
+  "login_timeout_seconds": 12,       // 提交认证的超时（门户有时要 5~6 秒才回包）
+  "fast_retry_seconds": 2,           // 刚开机那几分钟的重试间隔
+  "fast_retry_window_seconds": 120,  // "刚开机"持续多少秒
+  "retry_interval_seconds": 10,      // 之后的重试间隔
+  "max_wait_seconds": 300,           // 单次运行最多等多久（等 WiFi 起来）
+
+  // 日志与单实例锁（都放在程序旁边）
   "log_file": "login.log",
-  "log_max_kb": 512,
+  "log_max_kb": 512,                 // 超过就截断，保留后半段
   "lock_file": "login.lock",
   "lock_stale_seconds": 60,
+
+  // 完全没网络时主动让 Windows 去连这些 WiFi（只在"一个可用网络都没有"时才动手，不会抢已连上的网）
   "wifi_nudge": true,
   "wifi_ssid": "SEU-ISP",
   "wifi_interface": "WLAN",
