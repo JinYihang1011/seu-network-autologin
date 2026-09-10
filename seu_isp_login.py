@@ -37,6 +37,11 @@ DEFAULT_CONFIG = {
     "account": "",
     "password": "",
     "isp_suffix": "@cmcc",
+    # 连上哪个无线网络就用哪一份配置；没匹配到的 SSID 用上面的默认值
+    "profiles": [
+        {"ssid": "SEU-ISP", "isp_suffix": "@cmcc", "note": "运营商宽带（中国移动）"},
+        {"ssid": "SEU-WLAN", "isp_suffix": "@xyw", "note": "校园网（校园用户）"},
+    ],
     # 登录协议：SEU 对本机所在网段(10.210.0.0/16)用的是 PORTAL 协议(eportal)，
     # 本地认证 /drcom/login 虽然也会返回 result=1，但不会在 AC 上真正放行。
     "login_mode": "auto",
@@ -252,11 +257,11 @@ def find_portal(opener, cfg: dict, timeout: float):
     return None, "；".join(notes) if notes else "无可用地址"
 
 
-def build_login_url(base: str, cfg: dict) -> str:
+def build_login_url(base: str, cfg: dict, creds: dict) -> str:
     params = {
         "callback": "dr1003",
-        "DDDDD": str(cfg.get("account", "")) + str(cfg.get("isp_suffix") or ""),
-        "upass": str(cfg.get("password", "")),
+        "DDDDD": creds["account"] + creds["suffix"],
+        "upass": creds["password"],
         "0MKKey": "123456",
         "R1": "0",
         "R2": "",
@@ -270,7 +275,7 @@ def build_login_url(base: str, cfg: dict) -> str:
     return urlparse.urljoin(base, path) + "?" + urlparse.urlencode(params)
 
 
-def build_portal_login_url(cfg: dict, ip: str) -> str:
+def build_portal_login_url(cfg: dict, ip: str, creds: dict) -> str:
     """eportal 的 PORTAL 协议登录接口（?c=Portal&a=login）。"""
     base = cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"]
     params = {
@@ -278,8 +283,8 @@ def build_portal_login_url(cfg: dict, ip: str) -> str:
         "a": "login",
         "callback": "dr1003",
         "login_method": str(cfg.get("portal_login_method", 1)),
-        "user_account": str(cfg.get("account", "")) + str(cfg.get("isp_suffix") or ""),
-        "user_password": str(cfg.get("password", "")),
+        "user_account": creds["account"] + creds["suffix"],
+        "user_password": creds["password"],
         "wlan_user_ip": ip or "",
         "wlan_user_ipv6": "",
         "wlan_user_mac": "",
@@ -311,11 +316,63 @@ def build_portal_logout_url(cfg: dict, ip: str) -> str:
     return base + "?" + urlparse.urlencode(params)
 
 
-def login_candidates(cfg: dict, ip: str, portal_base: str):
+def current_ssid(cfg: dict) -> str:
+    """当前连着的无线网络名。只和配置里出现过的 SSID 比对，不解析本地化的 netsh 输出。"""
+    ssids = [str(item.get("ssid")) for item in (cfg.get("profiles") or []) if item.get("ssid")]
+    if cfg.get("wifi_ssid"):
+        ssids.append(str(cfg.get("wifi_ssid")))
+    ssids = [name for name in ssids if name]
+    if not ssids:
+        return ""
+    # 1) netsh：SYSTEM / 管理员上下文可用，最快
+    found = match_ssid(run_text(["netsh", "wlan", "show", "interfaces"]), ssids)
+    if found:
+        return found
+    # 2) 网络列表管理器：普通用户上下文也能用（netsh 的 WlanQueryInterface 需要提权）
+    found = match_ssid(run_text([
+        "powershell", "-NoProfile", "-Command", "(Get-NetConnectionProfile).Name",
+    ]), ssids)
+    return found or ""
+
+
+def run_text(command: list) -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="gbk",
+                                errors="replace", timeout=20)
+        return result.stdout or ""
+    except Exception:
+        return ""
+
+
+def match_ssid(output: str, ssids: list) -> str:
+    for name in ssids:
+        if name and re.search(re.escape(name), output or "", re.IGNORECASE):
+            return name
+    return ""
+
+
+def credentials_for(cfg: dict, ssid: str) -> dict:
+    """按当前 SSID 取账号/密码/运营商后缀；profile 里的值优先，缺省回退到顶层配置。"""
+    profile = {}
+    for item in cfg.get("profiles") or []:
+        if ssid and str(item.get("ssid") or "").lower() == ssid.lower():
+            profile = item
+            break
+    suffix = profile.get("isp_suffix")
+    return {
+        "account": str(profile.get("account") or cfg.get("account") or ""),
+        "password": str(profile.get("password") or cfg.get("password") or ""),
+        "suffix": str(cfg.get("isp_suffix") or "") if suffix is None else str(suffix),
+    }
+
+
+def login_candidates(cfg: dict, ip: str, portal_base: str, creds: dict, ssid: str = ""):
     """返回要依次尝试的登录接口。auto = 先 PORTAL 协议，再退回本地认证。"""
     mode = str(cfg.get("login_mode") or "auto").lower()
-    portal = (build_portal_login_url(cfg, ip), "PORTAL 协议（eportal，本机 IP %s）" % (ip or "?"))
-    local = (build_login_url(portal_base, cfg), "本地认证（/drcom/login）")
+    portal = (build_portal_login_url(cfg, ip, creds),
+              "PORTAL 协议（eportal，本机 IP %s，网络 %s，账号 %s%s）"
+              % (ip or "?", ssid or "未识别", creds["account"], creds["suffix"]))
+    local = (build_login_url(portal_base, cfg, creds), "本地认证（/drcom/login）")
     if mode == "portal":
         return [portal]
     if mode == "drcom":
@@ -383,15 +440,14 @@ def wait_for_connectivity(cfg: dict, timeout: float) -> bool:
     return False
 
 
-def nudge_wifi(cfg: dict, waited: float, last_nudge: list) -> None:
+def nudge_wifi(cfg: dict, waited: float, last_nudge: list, ssids: list) -> None:
     """本机完全没有可用网络时，主动让 Windows 去连指定 SSID。
 
     只在“一个可用网络都没有”时才动手，所以不会把已经从别处上网的机器抢过来。
     """
-    if not cfg.get("wifi_nudge", True):
+    if not cfg.get("wifi_nudge", True) or not ssids:
         return
-    ssid = str(cfg.get("wifi_ssid") or "")
-    if not ssid or waited < float(cfg.get("wifi_nudge_after_seconds", 8)):
+    if waited < float(cfg.get("wifi_nudge_after_seconds", 8)):
         return
     gap = float(cfg.get("wifi_nudge_interval_seconds", 20))
     if last_nudge and (time.time() - last_nudge[0]) < gap:
@@ -402,17 +458,18 @@ def nudge_wifi(cfg: dict, waited: float, last_nudge: list) -> None:
         last_nudge[0] = time.time()
     else:
         last_nudge.append(time.time())
-    command = ["netsh", "wlan", "connect", "name=%s" % ssid]
     interface = str(cfg.get("wifi_interface") or "")
-    if interface:
-        command.append("interface=%s" % interface)
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding="gbk",
-                                errors="replace", timeout=20)
-        output = " ".join((result.stdout or "").split())[:120]
-    except Exception as exc:
-        output = "%s: %s" % (exc.__class__.__name__, exc)
-    log(cfg, "    主动连接无线网络 %s：%s" % (ssid, output or "（无输出）"))
+    for ssid in ssids:
+        command = ["netsh", "wlan", "connect", "name=%s" % ssid]
+        if interface:
+            command.append("interface=%s" % interface)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, encoding="gbk",
+                                    errors="replace", timeout=20)
+            output = " ".join((result.stdout or "").split())[:100]
+        except Exception as exc:
+            output = "%s: %s" % (exc.__class__.__name__, exc)
+        log(cfg, "    主动连接无线网络 %s：%s" % (ssid, output or "（无输出）"))
 
 
 def main(argv) -> int:
@@ -440,9 +497,14 @@ def main(argv) -> int:
 
     log(
         cfg,
-        "===== 开始认证：账号 %s%s（运营商后缀 %s）====="
-        % (cfg.get("account"), cfg.get("isp_suffix") or "", cfg.get("isp_suffix") or "无"),
+        "===== 开始认证：默认账号 %s%s，无线网络自动识别 ====="
+        % (cfg.get("account"), cfg.get("isp_suffix") or ""),
     )
+
+    wifi_ssids = [str(item.get("ssid")) for item in (cfg.get("profiles") or []) if item.get("ssid")]
+    if cfg.get("wifi_ssid"):
+        wifi_ssids.append(str(cfg.get("wifi_ssid")))
+    wifi_ssids = [name for name in wifi_ssids if name]
 
     try:
         attempt = 0
@@ -459,14 +521,16 @@ def main(argv) -> int:
             base, info = find_portal(opener, cfg, timeout)
 
             if base is None:
-                nudge_wifi(cfg, now - started, last_nudge)
+                nudge_wifi(cfg, now - started, last_nudge, wifi_ssids)
                 # 网络还没起来时失败是常态，只在前几次和每分钟打一条日志，避免刷屏
                 if attempt <= 3 or now >= quiet_until:
                     log(cfg, "第 %d 次：未发现校园网认证门户（%s），%g 秒后重试" % (attempt, info, wait))
                     quiet_until = now + 60
             else:
                 source_ip = local_ip()
-                candidates = login_candidates(cfg, source_ip, base)
+                ssid = current_ssid(cfg)
+                creds = credentials_for(cfg, ssid)
+                candidates = login_candidates(cfg, source_ip, base, creds, ssid)
                 for index, (login_url, mode_desc) in enumerate(candidates, 1):
                     state, detail, snippet = "unknown", "", ""
                     try:

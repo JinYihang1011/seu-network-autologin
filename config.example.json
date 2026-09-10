@@ -2,6 +2,10 @@
   "account": "你的学号",
   "password": "你的密码",
   "isp_suffix": "@cmcc",
+  "profiles": [
+    { "ssid": "SEU-ISP", "isp_suffix": "@cmcc", "note": "运营商宽带（中国移动）" },
+    { "ssid": "SEU-WLAN", "isp_suffix": "@xyw", "note": "校园网（校园用户）" }
+  ],
   "login_mode": "auto",
   "portal_login_base": "https://w.seu.edu.cn:801/eportal/",
   "portal_login_method": 1,
