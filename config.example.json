@@ -12,7 +12,8 @@
   "js_version": "1.0",
   "portal_urls": [
     "http://w.seu.edu.cn/",
-    "http://10.80.128.2/"
+    "http://10.80.128.2/",
+    "http://10.9.10.100/"
   ],
   "portal_host_header": "w.seu.edu.cn",
   "login_path": "/drcom/login",

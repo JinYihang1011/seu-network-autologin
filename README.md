@@ -54,6 +54,10 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 > 但它不会在 AC 上真正放行——表现为「日志说登录成功，实际还是没网」。
 > 本脚本默认走 PORTAL 协议，并以外网是否真的通作为最终判据。
 
+> 东大不同网段的门户地址不一样（例如有人的登录页是 `http://10.9.10.100/`）。脚本会按
+> `portal_urls` 依次探测；如果发现门户不是 `w.seu.edu.cn`，还会按探测到的地址推导一个 eportal
+> 入口再试一次。换网段时通常需要按实际情况改 `portal_urls` / `portal_login_base`。
+
 ## 为什么还要做外网校验
 
 未认证时，任何 HTTP 请求都会被门户劫持成认证页（返回 200 + 一段门户 HTML）。
@@ -66,8 +70,8 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 ## 安装
 
 ```powershell
-git clone https://github.com/JinYihang1011/seu-autologin.git
-cd seu-autologin
+git clone https://github.com/JinYihang1011/seu-network-autologin.git
+cd seu-network-autologin
 copy config.example.json config.json
 notepad config.json                 # 填 account / password / isp_suffix
 python seu_isp_login.py --once      # 先手动跑一次，确认能认证成功
@@ -159,3 +163,19 @@ LICENSE                 MIT
   但接口地址、参数、运营商后缀都可以在 `config.json` 里改。
 - 仅供学习和个人便利使用，请遵守学校的网络管理规定。
 - 本项目以 MIT 协议开源，见 [LICENSE](LICENSE)。
+
+## 相关项目
+
+动手前后看过这些同类仓库（截至 2026-09 的 GitHub 搜索结果），各有侧重：
+
+| 项目 | 说明 |
+| --- | --- |
+| [NN708/seu-wlan-login](https://github.com/NN708/seu-wlan-login) | 最流行的 SEU-WLAN 一键登录（Python + iOS 快捷指令），面向一次性登录 |
+| [ChenYuWuAi/seu-autologin](https://github.com/ChenYuWuAi/seu-autologin) | Linux（Ubuntu + systemd）版自动登录 |
+| [geniezi/SEU-WLAN-LOGIN](https://github.com/geniezi/SEU-WLAN-LOGIN) | OpenWrt 路由器版；用的是同一套 eportal `?c=Portal&a=login` 接口 |
+| [PC-DOS/SEU-WLAN-AutoLogin](https://github.com/PC-DOS/SEU-WLAN-AutoLogin) | Windows GUI 工具（VB.NET），同样支持 SEU-WLAN / SEU-ISP |
+| [Flynn-woo/seu-campus-autologin-windows](https://github.com/Flynn-woo/seu-campus-autologin-windows) | Windows 开机自启，工程化完整（安装器/CI/Release），但只适配 `10.9.10.100` 门户 |
+| [YunfanGoForIt/SEU-OpenWrt-Gateway](https://github.com/YunfanGoForIt/SEU-OpenWrt-Gateway) | OpenWrt 网关方案，含 portal 自动登录与 OpenClash 共存经验 |
+
+本仓库的定位：**Windows 原生 + 双网络按 SSID 自动切换 + Python 标准库零依赖 +
+开机（SYSTEM）/登录/每 15 分钟三重触发 + 认证后真实外网校验**。

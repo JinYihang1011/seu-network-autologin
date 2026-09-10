@@ -48,7 +48,8 @@ DEFAULT_CONFIG = {
     "portal_login_base": "https://w.seu.edu.cn:801/eportal/",
     "portal_login_method": 1,
     "js_version": "1.0",
-    "portal_urls": ["http://w.seu.edu.cn/", "http://10.80.128.2/"],
+    # 东大不同网段的门户地址不一样，探测列表按顺序试；确认不了就跳过
+    "portal_urls": ["http://w.seu.edu.cn/", "http://10.80.128.2/", "http://10.9.10.100/"],
     "portal_host_header": "w.seu.edu.cn",
     "login_path": "/drcom/login",
     # 认证结果不能只信门户的 result，必须再校验一次真实外网
@@ -275,9 +276,9 @@ def build_login_url(base: str, cfg: dict, creds: dict) -> str:
     return urlparse.urljoin(base, path) + "?" + urlparse.urlencode(params)
 
 
-def build_portal_login_url(cfg: dict, ip: str, creds: dict) -> str:
+def build_portal_login_url(cfg: dict, ip: str, creds: dict, base: str = "") -> str:
     """eportal 的 PORTAL 协议登录接口（?c=Portal&a=login）。"""
-    base = cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"]
+    base = base or cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"]
     params = {
         "c": "Portal",
         "a": "login",
@@ -377,7 +378,23 @@ def login_candidates(cfg: dict, ip: str, portal_base: str, creds: dict, ssid: st
         return [portal]
     if mode == "drcom":
         return [local]
-    return [portal, local]
+    candidates = [portal, local]
+    # 门户不挂在 w.seu.edu.cn 时（东大其他网段），按探测到的地址推一个 eportal 入口再试一次
+    derived = portal_base_from(portal_base)
+    configured = (cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"]).rstrip("/")
+    if derived and derived.rstrip("/") != configured:
+        candidates.append((build_portal_login_url(cfg, ip, creds, derived),
+                           "PORTAL 协议（按探测地址推导 %s）" % derived))
+    return candidates
+
+
+def portal_base_from(discovered: str) -> str:
+    """从探测到的门户地址推导 eportal 登录入口，例如 http://10.9.10.100/ → http://10.9.10.100/eportal/"""
+    parts = urlparse.urlsplit(discovered or "")
+    host = parts.netloc
+    if not host:
+        return ""
+    return "%s://%s/eportal/" % (parts.scheme or "http", host)
 
 
 def classify(body_text: str):
