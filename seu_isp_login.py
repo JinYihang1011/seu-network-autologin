@@ -807,6 +807,9 @@ def wait_for_enter() -> None:
 if __name__ == "__main__":
     args = sys.argv[1:]
     code = main(args)
+    if code == 0 and "--once" in args:
+        print("\n提示：上面只是手动跑了一次。想要自动认证（开机 / 登录 / 切换网络 / 睡眠唤醒），")
+        print("      请双击「2-安装开机自启.cmd」装一次；不装的话每次都得手动运行本程序。")
     if "--pause" in args:
         wait_for_enter()
     sys.exit(code)
