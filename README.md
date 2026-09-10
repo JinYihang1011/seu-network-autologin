@@ -50,7 +50,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 上实测通�
 ## 安装
 
 ```powershell
-git clone https://github.com/<你的用户名>/seu-isp-autologin.git
+git clone https://github.com/JinYihang1011/seu-isp-autologin.git
 cd seu-isp-autologin
 copy config.example.json config.json
 notepad config.json                 # 填 account / password / isp_suffix
