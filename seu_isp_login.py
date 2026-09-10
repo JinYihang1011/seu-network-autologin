@@ -723,6 +723,13 @@ def main(argv) -> int:
 
             if base is None:
                 nudge_wifi(cfg, now - started, last_nudge, wifi_ssids)
+                # 探不到门户、但外网能用 → 多半不在校园网（家里 / 手机热点），不用白等 5 分钟
+                if attempt >= 3 and attempt % 3 == 0:
+                    reachable, _info = connectivity_ok(cfg, timeout)
+                    if reachable:
+                        log(cfg, "第 %d 次：探测不到校园网认证门户，但外网是通的（当前不在校园网环境），本次结束"
+                            % attempt)
+                        return 0
                 # 网络还没起来时失败是常态，只在前几次和每分钟打一条日志，避免刷屏
                 if attempt <= 3 or now >= quiet_until:
                     log(cfg, "第 %d 次：未发现校园网认证门户（%s），%g 秒后重试" % (attempt, info, wait))

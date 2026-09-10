@@ -20,6 +20,21 @@ SEU 校园网自动登录 —— 使用说明（三步）
     login.log —— 每次运行的结果都在里面，第一眼看这个
 
 ----------------------------------------
+让校园网能自动连上（很重要）
+
+这个工具负责"认证"，但前提是 Windows 先把 WiFi 连上。
+检查：设置 → 网络和 Internet → WLAN → 管理已知网络 → 点开 SEU-WLAN / SEU-ISP
+      → 勾上「在范围内时自动连接」
+（管理员 PowerShell 里的等价命令）
+      netsh wlan set profileparameter name="SEU-WLAN" connectionmode=auto
+      netsh wlan set profileparameter name="SEU-ISP"  connectionmode=auto
+
+如果手机热点也设了自动连接，且排在校园网前面，电脑会优先连热点；
+在"管理已知网络"里把它上移/下移，或用
+      netsh wlan set profileorder name="SEU-ISP" interface="WLAN" priority=1
+把校园网提到前面。
+
+----------------------------------------
 注意事项
 
 1. 首次运行 exe 会弹 SmartScreen「未知发布者」，点「更多信息 → 仍要运行」。

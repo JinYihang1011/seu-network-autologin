@@ -144,6 +144,40 @@ python seu_isp_login.py --once      # 先手动跑一次，确认能认证成功
 > Windows 的「快速启动」开启时，「关机再开机」其实是从休眠恢复，不会触发开机触发器，
 > 这时由登录任务接上；真正的「重启」才走 Boot 任务。两个任务合起来覆盖各种情况。
 
+## 让校园网自动连接（Windows 侧设置）
+
+这个工具只负责「认证」，**前提是 Windows 先把 WiFi 连上**。很多人卡在这里：`SEU-WLAN`
+的配置文件如果设成了「手动连接」，离开 `SEU-ISP` 覆盖范围后电脑不会自己连校园网，自然也就不会自动认证。
+
+检查（管理员 PowerShell）：
+
+```powershell
+netsh wlan show profiles name="SEU-WLAN"    # 看 Connection mode
+```
+
+- `Connect automatically` = 会自动连，✅
+- `Connect manually` = 要手动点，需要改 👇
+
+改成自动连接（管理员 PowerShell）：
+
+```powershell
+netsh wlan set profileparameter name="SEU-WLAN" connectionmode=auto
+netsh wlan set profileparameter name="SEU-ISP"  connectionmode=auto
+```
+
+图形界面等价操作：设置 → 网络和 Internet → WLAN → 管理已知网络 → 选中网络 → 勾上「在范围内时自动连接」。
+
+另外两点值得顺手检查：
+
+- **已知网络的优先级**：`netsh wlan show profiles` 列出的顺序就是优先级（越靠前越优先）。
+  如果手机热点排在校园网前面，电脑在宿舍会优先连热点。调整：
+  `netsh wlan set profileorder name="SEU-ISP" interface="WLAN" priority=1`
+- **本工具的兜底**：`wifi_nudge`（默认开）会在「一个可用网络都没有」时主动执行
+  `netsh wlan connect`，按 `profiles` 里的顺序催 Windows 连校园网。
+
+设置好之后，完整链路是：Windows 自动连上 WiFi → 本工具自动认证 → 可以上网。
+开机、登录、切换网络（约 5 秒后）都会走这条链路。
+
 ## 验证（不用重启）
 
 ```powershell
