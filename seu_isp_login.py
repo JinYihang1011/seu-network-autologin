@@ -317,7 +317,7 @@ def find_portal(opener, cfg: dict, timeout: float):
 def build_login_url(base: str, cfg: dict, creds: dict) -> str:
     params = {
         "callback": "dr1003",
-        "DDDDD": creds["account"] + creds["suffix"],
+        "DDDDD": creds.get("prefix", "") + creds["account"] + creds["suffix"],
         "upass": creds["password"],
         "0MKKey": "123456",
         "R1": "0",
@@ -340,7 +340,7 @@ def build_portal_login_url(cfg: dict, ip: str, creds: dict, base: str = "") -> s
         "a": "login",
         "callback": "dr1003",
         "login_method": str(cfg.get("portal_login_method", 1)),
-        "user_account": creds["account"] + creds["suffix"],
+        "user_account": creds.get("prefix", "") + creds["account"] + creds["suffix"],
         "user_password": creds["password"],
         "wlan_user_ip": ip or "",
         "wlan_user_ipv6": "",
@@ -416,10 +416,13 @@ def credentials_for(cfg: dict, ssid: str) -> dict:
             profile = item
             break
     suffix = profile.get("isp_suffix")
+    prefix = profile.get("account_prefix")
     return {
         "account": str(profile.get("account") or cfg.get("account") or ""),
         "password": str(profile.get("password") or cfg.get("password") or ""),
         "suffix": str(cfg.get("isp_suffix") or "") if suffix is None else str(suffix),
+        # 校园网（SEU-WLAN）实测要用 ",0," 前缀且不带后缀
+        "prefix": str(cfg.get("account_prefix") or "") if prefix is None else str(prefix),
     }
 
 
@@ -427,8 +430,8 @@ def login_candidates(cfg: dict, ip: str, portal_base: str, creds: dict, ssid: st
     """返回要依次尝试的登录接口。auto = 先 PORTAL 协议，再退回本地认证。"""
     mode = str(cfg.get("login_mode") or "auto").lower()
     portal = (build_portal_login_url(cfg, ip, creds),
-              "PORTAL 协议（eportal，本机 IP %s，网络 %s，账号 %s%s）"
-              % (ip or "?", ssid or "未识别", creds["account"], creds["suffix"]))
+              "PORTAL 协议（eportal，本机 IP %s，网络 %s，账号 %s%s%s）"
+              % (ip or "?", ssid or "未识别", creds.get("prefix", ""), creds["account"], creds["suffix"]))
     local = (build_login_url(portal_base, cfg, creds), "本地认证（/drcom/login）")
     if mode == "portal":
         return [portal]
@@ -587,7 +590,8 @@ WIZARD_CONFIG = """{
     },
     {
       "ssid": "SEU-WLAN",
-      "isp_suffix": "@xyw",
+      "account_prefix": ",0,",
+      "isp_suffix": "",
       "account": "",
       "password": "%(wlan_password)s",
       "note": "校园网（校园用户）"
