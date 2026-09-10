@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SEU-ISP 校园网自动登录脚本（东南大学运营商宽带，Drcom 认证门户）
+东南大学校园网自动登录（SEU-WLAN 校园网 / SEU-ISP 运营商宽带，Drcom 认证门户）
 
-作用：开机 / 登录 Windows 后自动完成 SEU-ISP 的网页认证，
-      免去每次开机手动打开浏览器、输入账号密码、选择运营商“中国移动”的步骤。
+作用：开机 / 登录 Windows 后自动完成校园网认证，免去每次手动打开浏览器、输入一卡通号和密码、
+      选择服务类型的步骤。账号和密码两个网络是同一个，写法按当前连的无线网络自动切换：
+        SEU-WLAN → ",0,一卡通号"（无感知认证前缀，不带服务类型后缀）
+        SEU-ISP  → "一卡通号@cmcc"（中国电信 @dx、中国联通 @lt）
 
 原理：
-  1. 直连探测认证门户 http://w.seu.edu.cn/ 或 http://10.80.128.2/（明确不走系统代理）
-  2. 确认返回的是 Drcom 门户页面后，调用 /drcom/login 接口提交账号 + 密码 + 运营商后缀
-  3. 解析返回的 dr1003({...}) JSON，判定：登录成功 / 已在线 / 账号密码错误 / 结果未知
+  1. 直连探测认证门户（w.seu.edu.cn / 10.80.128.2 / 10.9.10.100，明确不走系统代理）
+  2. 确认是 Drcom 门户后，调用 eportal 的 PORTAL 接口 ?c=Portal&a=login 提交账号密码
+     （老接口 /drcom/login 也会返回 result=1 但不放行，只作为兜底尝试）
+  3. 解析 dr1003({...})，并**真去请求一次外网**判断是否真的通：门户说成功但外网不通就继续重试，
+     连续两次「门户说在线但外网不通」会先注销再重新认证
   4. 网络没就绪时按间隔重试，直到成功、被明确拒绝或超过最大等待时间
 
-配置：同目录 config.json        日志：同目录 login.log
-手动运行：python seu_isp_login.py            正常重试模式
-          python seu_isp_login.py --once     只试一次，方便排查
+配置：同目录 config.json（支持 // 注释）   日志：同目录 login.log
+手动运行：seu-autologin.exe --once       只试一次
+          seu-autologin.exe --init       首次配置向导
+          seu-autologin.exe --pause      结束后停住等按键（给双击用）
 """
 
 from __future__ import annotations
@@ -589,7 +594,7 @@ WIZARD_PROFILE_ISP = """    {
       "ssid": "SEU-ISP",          // 运营商宽带；没有的话这条可以删掉
       "isp_suffix": "%(suffix)s", %(comment)s
       "account": "",
-      "password": "",             // 校园网和宽带密码不一样时，填这里
+      "password": "",             // 留空 = 用上面的 password
       "note": "%(note)s"
     }"""
 
@@ -661,7 +666,7 @@ def first_run_wizard(force: bool = False) -> bool:
         print(" 写配置文件失败：%s" % exc)
         return False
     print("\n 已保存配置：%s" % CONFIG_PATH)
-    print(" 提示：校园网和宽带的密码不一样时，之后打开 config.json 改 SEU-ISP 那条的 password。")
+    print(" 提示：两个网络用的是同一个一卡通号和同一个密码，要改直接编辑 config.json。")
     print(" 接下来自动试一次认证，结果会打印在下面。\n")
     return True
 
