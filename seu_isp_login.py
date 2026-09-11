@@ -50,6 +50,11 @@ def _app_dir() -> str:
 BASE_DIR = _app_dir()
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
+# 用 pythonw（GUI 子系统、没有控制台）去启动 netsh / powershell 这类控制台程序时，
+# Windows 会给子进程新开一个控制台窗口；Win11 默认宿主是 Windows Terminal，
+# 表现就是"终端一闪而过"。加这个标志让子进程完全无窗口。
+NO_WINDOW_FLAG = 0x08000000 if os.name == "nt" else 0
+
 DEFAULT_CONFIG = {
     "account": "",
     "password": "",
@@ -400,7 +405,7 @@ def current_ssid(cfg: dict) -> str:
 def run_text(command: list) -> str:
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="gbk",
-                                errors="replace", timeout=20)
+                                errors="replace", timeout=20, creationflags=NO_WINDOW_FLAG)
         return result.stdout or ""
     except Exception:
         return ""
@@ -568,7 +573,7 @@ def nudge_wifi(cfg: dict, waited: float, last_nudge: list, ssids: list) -> None:
             command.append("interface=%s" % interface)
         try:
             result = subprocess.run(command, capture_output=True, text=True, encoding="gbk",
-                                    errors="replace", timeout=20)
+                                    errors="replace", timeout=20, creationflags=NO_WINDOW_FLAG)
             output = " ".join((result.stdout or "").split())[:100]
         except Exception as exc:
             output = "%s: %s" % (exc.__class__.__name__, exc)
@@ -804,10 +809,15 @@ def wait_for_enter() -> None:
         pass
 
 
+def scheduled_task_installed() -> bool:
+    """检查自动任务是否已安装（用于提示，查不到就当没装）。"""
+    return "SEU-ISP-AutoLogin" in run_text(["schtasks", "/query", "/tn", "SEU-ISP-AutoLogin"])
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     code = main(args)
-    if code == 0 and "--once" in args:
+    if code == 0 and "--once" in args and not scheduled_task_installed():
         print("\n提示：上面只是手动跑了一次。想要自动认证（开机 / 登录 / 切换网络 / 睡眠唤醒），")
         print("      请双击「2-安装开机自启.cmd」装一次；不装的话每次都得手动运行本程序。")
     if "--pause" in args:
