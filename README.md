@@ -16,6 +16,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 - **会话卡死自愈**：连续两次「门户说在线但外网不通」会自动注销后重新认证
 - **单实例锁**：两个任务同时被唤醒时只跑一个，不会重复提交
 - **直连门户**：明确绕过系统代理
+- **顺手关掉「登录到网络」弹窗**：装任务时自动关掉 Windows 那个联网验证弹窗（可一键恢复，见下文）
 
 ## 支持的网络与服务类型
 
@@ -119,6 +120,8 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
    有没有运营商宽带（没有就直接回车）；它会自动生成 `config.json` 并立刻试一次认证，
    看到「认证完成，外网已连通」就成了
 3. **双击 `2-安装开机自启.cmd`**（UAC 点「是」）：装好后开机、登录、**切换网络**都会自动认证
+   顺带会把 Windows 的「登录到网络」弹窗关掉（原理、代价和恢复方法见
+   [关掉「登录到网络」弹窗](#关掉登录到网络弹窗)）
 4. 出问题就打开同目录的 `login.log`；包里的 `使用说明.txt` 是同样步骤（写给不用命令行的人）
 
 两个 exe 的区别：`seu-autologin.exe` 带控制台（手动运行能看到输出），`seu-autologinw.exe` 无窗口
@@ -179,6 +182,33 @@ netsh wlan set profileparameter name="SEU-ISP"  connectionmode=auto
 设置好之后，完整链路是：Windows 自动连上 WiFi → 本工具自动认证 → 可以上网。
 开机、登录、切换网络（约 5 秒后）都会走这条链路。
 
+## 关掉「登录到网络」弹窗
+
+**装任务时（`2-安装开机自启.cmd`）会自动帮你关掉**，这一节说明原理、代价和恢复方法。
+
+**为什么会有这个弹窗**：每次连上 `SEU-ISP` / `SEU-WLAN`，Windows 自带的「网络连接状态指示器」
+（NCSI）都会去请求一次 `http://www.msftconnecttest.com/connecttest.txt`，用它判断这个网络有没有外网。
+校园门户把这个请求劫持到登录页，Windows 就认定「这是需要登录的热点」，于是弹通知并**自动打开浏览器**
+到门户页面。本工具认证只要 1 秒左右，但弹窗在这一秒之前就已经弹出来了 —— 所以会出现
+「脚本很快就登录好了，浏览器还是弹了一下」的现象。
+
+**关掉之后**：Windows 不再做这项探测，即注册表
+
+```
+HKLM\SYSTEM\CurrentControlSet\Services\NlaSvc\Parameters\Internet
+    EnableActiveProbing : 1（默认）→ 0
+```
+
+本工具自己的外网校验请求的是**同一个网址**，不受影响，认证正确性和速度都没有任何变化。
+
+**代价**：Windows 不再知道「这个网络需要登录」。万一认证没成功（比如密码改了、开着 Clash 的 TUN、
+门户改版），托盘图标可能仍然显示已连接，也不会再弹窗提醒你 —— 记得看 `login.log`。
+另外，如果以后做过「网络重置」或某些大版本更新，这个值可能被改回 `1`，弹窗就会回来，重跑一次即可。
+
+**恢复弹窗**：双击 `4-恢复联网验证弹窗.cmd`（或管理员 PowerShell 跑 `signin_popup.ps1 -Restore`）。
+想重新关掉：双击 `3-关闭联网验证弹窗.cmd`。
+装任务时**不想要**这一步：管理员 PowerShell 跑 `install_tasks.ps1 -KeepSignInPopup`。
+
 ## 验证（不用重启）
 
 ```powershell
@@ -201,7 +231,7 @@ python seu_isp_login.py --once   # 跑一次认证
 | `account` | — | **一卡通号**（登录校园网时输的那个号） |
 | `password` | — | 密码。**校园网和宽带用的是同一个账号和密码** |
 | `isp_suffix` | `@cmcc` | 默认运营商后缀 |
-| `profiles` | SEU-ISP→`@cmcc`、SEU-WLAN→`@xyw` | 按 SSID 的配置，可各自写 `account` / `password` / `isp_suffix` |
+| `profiles` | SEU-ISP→`@cmcc`、SEU-WLAN→`,0,` 前缀 + 无后缀 | 按 SSID 的配置，可各自写 `account` / `password` / `isp_suffix` / `account_prefix` |
 | `login_mode` | `auto` | `auto` = 先 PORTAL 协议，失败再回退本地认证；也可强制 `portal` / `drcom` |
 | `portal_login_base` | `https://w.seu.edu.cn:801/eportal/` | 登录 / 注销接口地址 |
 | `max_wait_seconds` | `300` | 单次运行最多等多久（开机时网络可能起得慢） |
@@ -218,10 +248,13 @@ seu_isp_login.py        主脚本（Python 3 标准库，无第三方依赖）
 config.example.json     配置模板，复制成 config.json 后填自己的账号密码
 1-首次配置并测试.cmd    首次运行向导 + 试认证（双击即可）
 2-安装开机自启.cmd      注册计划任务（双击，会自动提权）
+3-关闭联网验证弹窗.cmd  关掉 Windows 的「登录到网络」弹窗（重装/重跑用）
+4-恢复联网验证弹窗.cmd  把上面那个弹窗恢复回来
 使用说明.txt            给不用命令行的人看的三步说明
 logout.py               把本机踢下线，用来测试自动登录
 install_tasks.ps1       注册两个计划任务（需管理员）
 install_tasks.cmd       双击即可（自动提权）
+signin_popup.ps1        关闭/恢复联网验证弹窗的实际逻辑（-Restore 恢复）
 build_exe.ps1           用 PyInstaller 自己打包 exe
 LICENSE                 MIT
 ```
@@ -238,6 +271,7 @@ LICENSE                 MIT
 | `认证被拒绝` | 一卡通号或密码不对（两个网络是同一个账号密码） |
 | `未发现校园网认证门户` | 请求到不了门户：确认连着校园网；开着 Clash 的 TUN 模式会劫持去门户的路由，需要关掉 TUN 或让 Clash 晚于认证启动 |
 | `已有另一个认证实例在运行，本次跳过` | 两个任务同时被唤醒，属正常 |
+| 托盘不再弹「需要操作 / 登录到网络」 | 正常，弹窗已按上文关掉；想恢复双击 `4-恢复联网验证弹窗.cmd` |
 
 ## 关于速度
 

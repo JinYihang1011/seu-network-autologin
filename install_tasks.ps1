@@ -4,7 +4,12 @@
 #   SEU-ISP-AutoLogin-Boot : at system startup, runs as SYSTEM (works at the lock screen)
 #   SEU-ISP-AutoLogin      : at user logon and every 15 minutes, runs as the current user
 #
+# It also turns off the Windows "sign in to network" popup (see signin_popup.ps1).
+# Pass -KeepSignInPopup to skip that step.
+#
 # ASCII-only on purpose: Windows PowerShell 5.1 reads non-BOM UTF-8 as ANSI and would garble text.
+
+param([switch]$KeepSignInPopup)
 
 $ErrorActionPreference = 'Stop'
 $failed = $false
@@ -103,6 +108,21 @@ Write-Host ''
 Write-Host ('Log file : ' + (Join-Path $base 'login.log'))
 Write-Host ('Test now : ' + $logonExecute + ' --once')
 Write-Host 'Run task : Start-ScheduledTask -TaskName SEU-ISP-AutoLogin'
+Write-Host 'Popup    : 3-....cmd turns it off, 4-....cmd turns it back on'
 Write-Host 'Remove   : Unregister-ScheduledTask -TaskName SEU-ISP-AutoLogin -Confirm:$false'
 Write-Host '           Unregister-ScheduledTask -TaskName SEU-ISP-AutoLogin-Boot -Confirm:$false'
+
+# Windows pops a "sign in to network" notification (and opens the browser) every time it
+# joins SEU-ISP / SEU-WLAN, because the campus portal hijacks Windows' own connectivity
+# probe. Our login is seconds faster than the popup is useful, so turn the probe off.
+Write-Host ''
+$popupScript = Join-Path $base 'signin_popup.ps1'
+if ($KeepSignInPopup) {
+    Write-Host 'SKIP  sign-in popup left enabled (-KeepSignInPopup)'
+} elseif (-not (Test-Path -LiteralPath $popupScript)) {
+    Write-Host 'SKIP  signin_popup.ps1 not found next to install_tasks.ps1' -ForegroundColor Yellow
+} else {
+    & $popupScript
+}
+
 if ($failed) { exit 1 }

@@ -62,7 +62,8 @@ DEFAULT_CONFIG = {
     # 连上哪个无线网络就用哪一份配置；没匹配到的 SSID 用上面的默认值
     "profiles": [
         {"ssid": "SEU-ISP", "isp_suffix": "@cmcc", "note": "运营商宽带（中国移动）"},
-        {"ssid": "SEU-WLAN", "isp_suffix": "@xyw", "note": "校园网（校园用户）"},
+        # 校园网：账号要带 ",0," 前缀、不带运营商后缀（实测）
+        {"ssid": "SEU-WLAN", "account_prefix": ",0,", "isp_suffix": "", "note": "校园网（校园用户）"},
     ],
     # 登录协议：SEU 对本机所在网段(10.210.0.0/16)用的是 PORTAL 协议(eportal)，
     # 本地认证 /drcom/login 虽然也会返回 result=1，但不会在 AC 上真正放行。
