@@ -26,7 +26,7 @@
     {
       // 运营商宽带；没有的话这条可以删掉。ssid 要和 Windows 里显示的无线网络名一致
       "ssid": "SEU-ISP",
-      "isp_suffix": "@cmcc",        // 移动 @cmcc / 电信 @dx / 联通 @lt
+      "isp_suffix": "@cmcc",        // 移动 @cmcc / 电信 @dx / 联通 @unicom
       "account": "",
       "password": "",               // 留空 = 用上面的 password
       "note": "运营商宽带（中国移动）"

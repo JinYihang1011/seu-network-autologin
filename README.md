@@ -22,7 +22,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 | 无线网络 | 实际提交的账号格式 | 说明 |
 | --- | --- | --- |
-| SEU-ISP（中国移动） | `一卡通号@cmcc` | 电信 `@dx`、联通 `@lt` |
+| SEU-ISP（中国移动） | `一卡通号@cmcc` | 电信 `@dx`、联通 `@unicom` |
 | SEU-WLAN（校园用户） | `,0,一卡通号` | 无感知认证前缀，**不带后缀**（实测） |
 
 两个网络是同一个门户（`w.seu.edu.cn`），但账号写法不同，脚本按当前 SSID 自动选。
@@ -52,7 +52,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
     },
     {
       "ssid": "SEU-ISP",       // 运营商宽带（没有的话这条可删）
-      "isp_suffix": "@cmcc",   // 移动 @cmcc、电信 @dx、联通 @lt
+      "isp_suffix": "@cmcc",   // 移动 @cmcc、电信 @dx、联通 @unicom
       "account": "",
       "password": "",          // 校园网和宽带密码不一样时填这里
       "note": "运营商宽带（中国移动）"
