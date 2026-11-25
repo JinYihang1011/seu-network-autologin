@@ -25,10 +25,14 @@
 from __future__ import annotations
 
 import base64
+from contextlib import closing
+import http.client
 import json
 import os
 import re
+import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -68,6 +72,7 @@ DEFAULT_CONFIG = {
     # 登录协议：SEU 对本机所在网段(10.210.0.0/16)用的是 PORTAL 协议(eportal)，
     # 本地认证 /drcom/login 虽然也会返回 result=1，但不会在 AC 上真正放行。
     "login_mode": "auto",
+    "campus_wifi_only": True,
     "portal_login_base": "https://w.seu.edu.cn:801/eportal/",
     "portal_login_method": 1,
     "js_version": "1.0",
@@ -677,6 +682,164 @@ def first_run_wizard(force: bool = False) -> bool:
     return True
 
 
+CAMPUS_SSIDS = {"SEU-WLAN", "SEU-ISP"}
+CAMPUS_PORTAL_HOST = "w.seu.edu.cn"
+CAMPUS_PORTAL_IP = "10.80.128.2"
+CAMPUS_LOGIN_BASE = f"https://{CAMPUS_PORTAL_HOST}:802/eportal/"
+ISP_PORTAL_PORT = 804
+
+
+def campus_source(cfg: dict) -> tuple[str, str, str] | None:
+    """返回校园 SSID、无线网卡 IPv4 和 MAC。None 表示未确认校园网。"""
+    netsh = run_text(["netsh", "wlan", "show", "interfaces"])
+    names = {value.strip().upper() for value in re.findall(r"^[ \t]*SSID[ \t]*:[ \t]*([^\r\n]+)", netsh, re.M)}
+    interface = "'" + str(cfg.get("wifi_interface") or "WLAN").replace("'", "''") + "'"
+    installed_pwsh = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "PowerShell", "7", "pwsh.exe")
+    pwsh = installed_pwsh if os.path.isfile(installed_pwsh) else (shutil.which("pwsh") or "powershell")
+    command = [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+    if not names:
+        profiles = run_text(command + [f"(Get-NetConnectionProfile -InterfaceAlias {interface}).Name"])
+        names = {name.strip().upper() for name in profiles.splitlines() if name.strip()}
+    if len(names) != 1 or not names <= CAMPUS_SSIDS:
+        return None
+
+    # 默认路由可能返回 TUN 的虚拟地址，认证时要使用物理 WLAN 网卡的地址。
+    output = run_text(command + [
+        "[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | "
+        f"Where-Object {{ $_.Name -eq {interface} -and $_.OperationalStatus -eq 'Up' "
+        "-and $_.NetworkInterfaceType -eq 'Wireless80211' } | "
+        "ForEach-Object { $mac = $_.GetPhysicalAddress().ToString(); "
+        "$_.GetIPProperties().UnicastAddresses | "
+        "Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' } | "
+        "ForEach-Object { '{0}|{1}' -f $_.Address.IPAddressToString, $mac } }"
+    ])
+    addresses = re.findall(r"^[ \t]*(10(?:\.\d{1,3}){3})\|([0-9A-Fa-f]{12})?[ \t]*\r?$", output, re.M)
+    address, mac = addresses[0] if len(addresses) == 1 else ("", "")
+    return next(iter(names)), address, mac.upper()
+
+
+class CampusPortalHTTPError(OSError):
+    def __init__(self, status: int):
+        super().__init__(f"Campus portal returned HTTP {status}")
+        self.status = status
+
+
+def campus_portal_get(port: int, path: str, source: str, timeout: float) -> str:
+    """限定为已核对的校内网关，TLS 仍校验学校域名。"""
+    context = ssl.create_default_context()
+    with socket.create_connection((CAMPUS_PORTAL_IP, port), timeout, source_address=(source, 0)) as channel:
+        with context.wrap_socket(channel, server_hostname=CAMPUS_PORTAL_HOST) as tls:
+            with closing(http.client.HTTPSConnection(CAMPUS_PORTAL_HOST, port, timeout=timeout)) as connection:
+                connection.sock = tls
+                connection.request("GET", path, headers={"Connection": "close", "Cache-Control": "no-cache"})
+                with connection.getresponse() as response:
+                    if response.status != 200:
+                        raise CampusPortalHTTPError(response.status)
+                    return decode_body(response.read(65536))
+
+
+def campus_online(source: str, timeout: float) -> bool:
+    body = campus_portal_get(443, "/drcom/chkstatus?callback=dr1002", source, timeout)
+    _, _, data = classify(body)
+    if not isinstance(data, dict) or str(data.get("result")) not in {"0", "1"}:
+        raise ValueError("Unrecognized campus portal status")
+    if str(data["result"]) == "0":
+        return False
+    if not any(data.get(key) == source for key in ("v4ip", "v46ip", "lip")):
+        raise ValueError("Campus portal reported a different source address")
+    return True
+
+
+def isp_online(source: str, mac: str, timeout: float) -> bool:
+    query = urlparse.urlencode({
+        "callback": "dr1003",
+        "wlan_user_ip": base64.b64encode(source.encode("ascii")).decode("ascii"),
+        "wlan_user_mac": mac,
+        "login_method": "1",
+    })
+    body = campus_portal_get(ISP_PORTAL_PORT, f"/eportal/portal/online_list?{query}", source, timeout)
+    _, _, data = classify(body)
+    if not isinstance(data, dict) or str(data.get("result")) not in {"0", "1"}:
+        raise ValueError("Unrecognized ISP portal status")
+    if str(data["result"]) == "0":
+        return False
+    entries = data.get("list")
+    if not isinstance(entries, list):
+        raise ValueError("Missing ISP online records")
+    return any(isinstance(item, dict) and item.get("online_ip") == source for item in entries)
+
+
+def campus_login_request(cfg: dict, ssid: str, source: str, mac: str, creds: dict) -> tuple[int, str]:
+    legacy = urlparse.urlsplit(build_portal_login_url(cfg, source, creds, CAMPUS_LOGIN_BASE))
+    if ssid == "SEU-WLAN":
+        return 802, f"{legacy.path}?{legacy.query}"
+
+    # ISP 门户的 HTTPS 前端把认证方式 1 的请求发给 /eportal/portal/login。
+    params = dict(urlparse.parse_qsl(legacy.query, keep_blank_values=True))
+    params.pop("c")
+    params.pop("a")
+    params.update(login_method="1", wlan_user_mac=mac, jsVersion="4.X", operate="portal_login")
+    return ISP_PORTAL_PORT, f"/eportal/portal/login?{urlparse.urlencode(params)}"
+
+
+def login_campus_wifi(cfg: dict, once: bool) -> int:
+    timeout = float(cfg.get("request_timeout_seconds", 4))
+    login_timeout = float(cfg.get("login_timeout_seconds", 12))
+    interval = max(2.0, float(cfg.get("retry_interval_seconds", 10)))
+    deadline = time.monotonic() + (0.0 if once else float(cfg.get("max_wait_seconds", 300)))
+    while True:
+        connection = campus_source(cfg)
+        if connection is None:
+            log(cfg, "当前未确认连接 SEU-WLAN 或 SEU-ISP，本次跳过")
+            return 0
+        ssid, source, mac = connection
+        if source:
+            phase = "查询在线状态"
+            try:
+                already_online = isp_online(source, mac, timeout) if ssid == "SEU-ISP" else campus_online(source, timeout)
+                if not already_online:
+                    if campus_source(cfg) != connection:
+                        log(cfg, f"{ssid} 连接已变化，本次认证跳过")
+                        return 0
+                    creds = credentials_for(cfg, ssid)
+                    if ssid == "SEU-ISP" and creds["suffix"] not in {"@cmcc", "@dx", "@lt"}:
+                        log(cfg, "SEU-ISP 缺少有效的运营商配置")
+                        return 3
+                    phase = "提交认证"
+                    port, target = campus_login_request(cfg, ssid, source, mac, creds)
+                    body = campus_portal_get(port, target, source, login_timeout)
+                    state, _, data = classify(body)
+                    if state == "authfail":
+                        log(cfg, f"{ssid} 门户拒绝认证")
+                        return 2
+                    if ssid == "SEU-ISP" and not isinstance(data, dict):
+                        raise ValueError("Unrecognized login response")
+                phase = "复核在线状态"
+                if campus_source(cfg) != connection:
+                    log(cfg, f"{ssid} 连接已变化，本次复核跳过")
+                    return 0
+                online = already_online
+                if not online:
+                    online = isp_online(source, mac, timeout) if ssid == "SEU-ISP" else campus_online(source, timeout)
+                if online:
+                    reachable, _ = connectivity_ok(cfg, timeout)
+                    if reachable and campus_source(cfg) == connection:
+                        if already_online:
+                            log(cfg, f"{ssid} 门户确认该网卡已在线，外网探测通过，无需重复认证")
+                        else:
+                            log(cfg, f"提交 {ssid} 认证后，门户确认该网卡在线，外网探测通过")
+                        return 0
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                # 异常消息或完整响应可能含登录 URL 或身份信息。
+                reason = f"HTTP {exc.status}" if isinstance(exc, CampusPortalHTTPError) else type(exc).__name__
+                log(cfg, f"{ssid} {phase}未通过（{reason}）")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log(cfg, f"{ssid} 未能确认校园网认证和外网同时可用")
+            return 1
+        time.sleep(min(interval, remaining))
+
+
 def main(argv) -> int:
     cfg = load_config()
     if cfg.get("_config_error"):
@@ -698,6 +861,20 @@ def main(argv) -> int:
         return 0
 
     once = "--once" in argv
+    use_campus_wifi = (
+        cfg.get("campus_wifi_only", True)
+        and str(cfg.get("login_mode") or "auto").lower() == "auto"
+        and (cfg.get("portal_login_base") or DEFAULT_CONFIG["portal_login_base"])
+        == DEFAULT_CONFIG["portal_login_base"]
+        and (cfg.get("portal_urls") or DEFAULT_CONFIG["portal_urls"])
+        == DEFAULT_CONFIG["portal_urls"]
+    )
+    if use_campus_wifi:
+        try:
+            return login_campus_wifi(cfg, once)
+        finally:
+            release_lock(lock)
+
     timeout = float(cfg.get("request_timeout_seconds", 6))
     login_timeout = float(cfg.get("login_timeout_seconds", 12))
     interval = max(1.0, float(cfg.get("retry_interval_seconds", 10)))

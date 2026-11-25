@@ -12,10 +12,10 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 - **锁屏阶段就认证**：系统启动时由 SYSTEM 计划任务触发，不用等登录 Windows
 - **同时支持 SEU-ISP 与 SEU-WLAN**：按当前 SSID 自动切换账号与「服务类型」后缀
 - **登录后兜底 + 断线自愈**：用户登录时再触发一次，之后每 15 分钟检查一次
-- **不只信门户返回**：每次认证后真的去请求一次外网，通了才算成功
-- **会话卡死自愈**：连续两次「门户说在线但外网不通」会自动注销后重新认证
+- **认证后复核**：查询校园网网关是否确认当前网卡在线，再检查外网
+- **避免重复认证**：已在线且外网可达时跳过；切网后重新识别当前连接
 - **单实例锁**：两个任务同时被唤醒时只跑一个，不会重复提交
-- **直连门户**：明确绕过系统代理
+- **直连门户**：从物理 Wi-Fi 网卡连接校内网关，保留学校域名的 HTTPS 证书校验
 - **顺手关掉「登录到网络」弹窗**：装任务时自动关掉 Windows 那个联网验证弹窗（可一键恢复，见下文）
 
 ## 支持的网络与服务类型
@@ -28,7 +28,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 两个网络是同一个门户（`w.seu.edu.cn`），但账号写法不同，脚本按当前 SSID 自动选。
 
 后缀来自门户自己下发的服务类型列表。`config.json` 的 `profiles` 里按 SSID 写好即可，
-连上哪个网络就用哪一份（没匹配到时用顶层的 `account` / `password` / `isp_suffix`）。
+连上哪个网络就用哪一份，对应配置留空时继承顶层值。默认只在 SEU-ISP 或 SEU-WLAN 上认证。
 两个网络**一般用同一个密码**；万一不一样，在对应 profile 里单独写 `password` 即可，
 留空则用顶层那个 —— 详见下面的「配置文件怎么填」。
 
@@ -63,51 +63,26 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
 
 几个要点：
 
-- **`ssid` 必须和 Windows 里显示的无线网络名一致**（大小写无所谓）。写错时日志会显示 `网络 未识别`，
-  然后退回用顶层默认后缀 —— 这时很容易出现「后缀对不上、认证被拒」。
+- **`ssid` 必须和 Windows 里显示的无线网络名一致**（大小写无所谓）。确认 `wifi_interface` 是实际无线网卡名，中文 Windows 常见的是 `WLAN`，英文 Windows 常见的是 `Wi-Fi`。
 - **`account_prefix`**：最终提交的账号 = `前缀 + 账号 + 后缀`。SEU-WLAN 实测要用 `,0,` 前缀、后缀留空。
 - **`password` 留空就用顶层那个**，写 `""` 和删掉这一行等价。
-- 密码填错时门户返回 `Authentication fail`，日志会写成 `认证被拒绝（Authentication fail）`，
-  脚本会立刻停下并提示，不会傻重试。
+- 门户明确拒绝账号或密码时，日志会记录 `门户拒绝认证`，脚本停止重试。
 - 其余参数（接口地址、超时、重试节奏、日志大小、没网时催连 WiFi 等）示例文件里逐条都有注释，一般不用动。
 
 ## 原理
 
-东南大学的认证门户是 Drcom 系统（`w.seu.edu.cn`）。把网页上的登录动作拆成 HTTP 请求：
+脚本按当前 SSID 选择账号格式和 HTTPS 认证路径。查询、提交和复核都从当前物理 Wi-Fi 网卡连接校内网关。
 
-| 动作 | 请求 |
-| --- | --- |
-| 登录 | `https://w.seu.edu.cn:801/eportal/?c=Portal&a=login` |
-| 注销 | `https://w.seu.edu.cn:801/eportal/?c=Portal&a=logout` |
+| 网络 | 查询在线状态 | 提交认证 |
+| --- | --- | --- |
+| SEU-WLAN | `w.seu.edu.cn:443/drcom/chkstatus` | `w.seu.edu.cn:802/eportal/` |
+| SEU-ISP | `w.seu.edu.cn:804/eportal/portal/online_list` | `w.seu.edu.cn:804/eportal/portal/login` |
 
-登录参数：
-
-| 参数 | 说明 |
-| --- | --- |
-| `login_method` | `1`（PORTAL 协议） |
-| `user_account` | `<一卡通号>@cmcc` / `<一卡通号>@xyw`（见上表） |
-| `user_password` | 密码 |
-| `wlan_user_ip` | 本机 IP，脚本自动获取 |
-| `jsVersion` | `1.0` |
-
-成功返回 `dr1003({"result":"1","msg":"认证成功"})`；已经在线时是 `{"result":"0","ret_code":2}`。
-
-> **踩坑记录**：老接口 `http://w.seu.edu.cn/drcom/login`（本地认证）**也会返回 `result=1`**，
-> 但它不会在 AC 上真正放行——表现为「日志说登录成功，实际还是没网」。
-> 本脚本默认走 PORTAL 协议，并以外网是否真的通作为最终判据。
-
-> 东大不同网段的门户地址不一样（例如有人的登录页是 `http://10.9.10.100/`）。脚本会按
-> `portal_urls` 依次探测；如果发现门户不是 `w.seu.edu.cn`，还会按探测到的地址推导一个 eportal
-> 入口再试一次。换网段时通常需要按实际情况改 `portal_urls` / `portal_login_base`。
+使用默认门户地址和 `login_mode: "auto"` 时走上表的流程。自定义 `portal_urls` / `portal_login_base`、显式选择 `portal` / `drcom`，或设置 `campus_wifi_only: false` 时，沿用旧版探测和认证逻辑。
 
 ## 为什么还要做外网校验
 
-未认证时，任何 HTTP 请求都会被门户劫持成认证页（返回 200 + 一段门户 HTML）。
-所以脚本在认证后请求 `http://www.msftconnecttest.com/connecttest.txt`，
-只有拿到 `Microsoft Connect Test` 才算成功：
-
-- 门户说成功、外网也通 → 收工
-- 门户说成功、外网不通 → 继续重试；连续两次则先注销再重登
+未认证时，外网 HTTP 请求可能被重定向到认证页。默认流程要求校园网网关确认当前网卡在线、微软联网探测返回 `Microsoft Connect Test`，并核对当前 SSID 和网卡。已在线时无需重复提交；状态与外网结果不一致时重新复核。
 
 ## 安装
 
@@ -118,7 +93,7 @@ Python 3 标准库实现，无第三方依赖，已在 Windows 11 + SEU-ISP 上�
    `config.json` 和 `login.log` 都放在 exe 旁边，别放会被清理的临时目录
 2. **双击 `1-首次配置并测试.cmd`**：第一次运行会问三个问题 —— 一卡通、密码（校园网和宽带是同一个）、
    有没有运营商宽带（没有就直接回车）；它会自动生成 `config.json` 并立刻试一次认证，
-   看到「认证完成，外网已连通」就成了
+   看到「门户确认该网卡在线，外网探测通过」就说明当前连接可用
 3. **双击 `2-安装开机自启.cmd`**（UAC 点「是」）：装好后开机、登录、**切换网络**都会自动认证
    顺带会把 Windows 的「登录到网络」弹窗关掉（原理、代价和恢复方法见
    [关掉「登录到网络」弹窗](#关掉登录到网络弹窗)）
@@ -212,16 +187,14 @@ HKLM\SYSTEM\CurrentControlSet\Services\NlaSvc\Parameters\Internet
 ## 验证（不用重启）
 
 ```powershell
-python logout.py                 # 调用门户注销接口，本机立刻断网
 python seu_isp_login.py --once   # 跑一次认证
 ```
 
-成功时 `login.log` 长这样（注意里面会写明识别到的网络与服务类型）：
+成功时 `login.log` 会区分本次提交和已经在线的情况：
 
 ```
-第 1 次-1：提交认证（PORTAL 协议（eportal，本机 IP 10.210.x.x，网络 SEU-ISP，账号 123456789@cmcc））→ 门户返回 认证成功｜dr1003({"result":"1","msg":"认证成功"})
-    外网校验通过（HTTP 200，内容匹配）
-第 1 次：认证完成，外网已连通
+提交 SEU-ISP 认证后，门户确认该网卡在线，外网探测通过
+SEU-ISP 门户确认该网卡已在线，外网探测通过，无需重复认证
 ```
 
 ## 配置项
@@ -232,13 +205,14 @@ python seu_isp_login.py --once   # 跑一次认证
 | `password` | — | 密码。**校园网和宽带用的是同一个账号和密码** |
 | `isp_suffix` | `@cmcc` | 默认运营商后缀 |
 | `profiles` | SEU-ISP→`@cmcc`、SEU-WLAN→`,0,` 前缀 + 无后缀 | 按 SSID 的配置，可各自写 `account` / `password` / `isp_suffix` / `account_prefix` |
-| `login_mode` | `auto` | `auto` = 先 PORTAL 协议，失败再回退本地认证；也可强制 `portal` / `drcom` |
-| `portal_login_base` | `https://w.seu.edu.cn:801/eportal/` | 登录 / 注销接口地址 |
+| `campus_wifi_only` | `true` | 默认门户配置下按校园 Wi-Fi 使用上表的 HTTPS 接口；`false` 使用旧版流程 |
+| `login_mode` | `auto` | 默认配置走新版流程；显式选择 `portal` / `drcom` 时使用对应旧协议 |
+| `portal_login_base` | `https://w.seu.edu.cn:801/eportal/` | 旧版流程使用的登录 / 注销接口地址 |
 | `max_wait_seconds` | `300` | 单次运行最多等多久（开机时网络可能起得慢） |
-| `fast_retry_seconds` / `fast_retry_window_seconds` | `2` / `120` | 前 2 分钟每 2 秒探测一次门户 |
-| `retry_interval_seconds` | `10` | 2 分钟之后的重试间隔 |
-| `wifi_nudge` | `true` | 完全没有网络时主动执行 `netsh wlan connect` 催 Windows 连网（按 profiles 顺序试） |
-| `wifi_interface` | `WLAN` | 上面那条用的网卡名 |
+| `fast_retry_seconds` / `fast_retry_window_seconds` | `2` / `120` | 旧版流程的快速探测设置 |
+| `retry_interval_seconds` | `10` | 默认流程的重试间隔 |
+| `wifi_nudge` | `true` | 旧版流程可以主动请求 Windows 连接指定 Wi-Fi |
+| `wifi_interface` | `WLAN` | Windows 无线网卡名 |
 | `log_file` / `log_max_kb` | `login.log` / `512` | 日志文件，超限自动截断保留后半段 |
 
 ## 目录结构
@@ -251,7 +225,7 @@ config.example.json     配置模板，复制成 config.json 后填自己的账�
 3-关闭联网验证弹窗.cmd  关掉 Windows 的「登录到网络」弹窗（重装/重跑用）
 4-恢复联网验证弹窗.cmd  把上面那个弹窗恢复回来
 使用说明.txt            给不用命令行的人看的三步说明
-logout.py               把本机踢下线，用来测试自动登录
+logout.py               旧版门户注销工具
 install_tasks.ps1       注册两个计划任务（需管理员）
 install_tasks.cmd       双击即可（自动提权）
 signin_popup.ps1        关闭/恢复联网验证弹窗的实际逻辑（-Restore 恢复）
@@ -265,10 +239,10 @@ LICENSE                 MIT
 
 | 日志 | 含义 |
 | --- | --- |
-| `认证完成，外网已连通` | 正常 |
-| `网络 未识别` | 没读到当前 SSID，会用顶层默认后缀；确认 `profiles` 里的 SSID 拼写与系统一致 |
-| `门户返回 认证成功` 但 `外网校验未通过` | 认证没真正生效，脚本会继续重试 |
-| `认证被拒绝` | 一卡通号或密码不对（两个网络是同一个账号密码） |
+| `门户确认该网卡已在线，外网探测通过` | 当前连接可用 |
+| `当前未确认连接 SEU-WLAN 或 SEU-ISP` | 检查当前 Wi-Fi 和 `wifi_interface` |
+| `查询在线状态未通过`、`提交认证未通过` 或 `复核在线状态未通过` | 查看失败阶段与 HTTP 状态或错误类型 |
+| `门户拒绝认证` | 检查一卡通号、密码和运营商后缀 |
 | `未发现校园网认证门户` | 请求到不了门户：确认连着校园网；开着 Clash 的 TUN 模式会劫持去门户的路由，需要关掉 TUN 或让 Clash 晚于认证启动 |
 | `已有另一个认证实例在运行，本次跳过` | 两个任务同时被唤醒，属正常 |
 | 托盘不再弹「需要操作 / 登录到网络」 | 正常，弹窗已按上文关掉；想恢复双击 `4-恢复联网验证弹窗.cmd` |

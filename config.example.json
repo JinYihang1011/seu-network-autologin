@@ -12,7 +12,7 @@
   "password": "密码",               // 校园网和宽带用的是同一个密码
 
   // ---------- 按无线网络分别配置 ----------
-  // 电脑连着哪个 WiFi 就用哪一份；都没匹配上时，用上面的 account / password / isp_suffix
+  // 电脑连接 SEU-ISP 或 SEU-WLAN 时使用对应配置，留空字段继承顶层配置
   "profiles": [
     {
       // 校园网：平时连的多数是这个。账号要带 ",0," 前缀且不带后缀（实测）
@@ -35,24 +35,27 @@
 
   // ---------- 下面这些一般不用改 ----------
 
-  // 登录协议：auto = 先试 PORTAL 协议（eportal），失败再回退本地认证；也可强制 "portal" / "drcom"
+  // 默认门户配置下只对 SEU-WLAN 和 SEU-ISP 认证。设为 false 可使用旧版流程。
+  "campus_wifi_only": true,
+
+  // 默认配置的 auto 使用 WLAN 802 / ISP 804；显式指定 portal / drcom 使用旧协议。
   "login_mode": "auto",
 
-  // 认证接口。东南大学用的是 eportal 的 PORTAL 协议
+  // 旧版认证接口。默认流程使用各 SSID 的 HTTPS 接口。
   "portal_login_base": "https://w.seu.edu.cn:801/eportal/",
   "portal_login_method": 1,
   "js_version": "1.0",
   "portal_host_header": "w.seu.edu.cn",
   "login_path": "/drcom/login",
 
-  // 探测认证门户用的地址。东大不同网段门户 IP 不一样，按顺序试，谁返回 Dr.COM 页面就用谁
+  // 旧版门户探测地址。自定义旧版门户时可以修改。
   "portal_urls": [
     "http://w.seu.edu.cn/",
     "http://10.80.128.2/",
     "http://10.9.10.100/"
   ],
 
-  // 认证是否成功以"真实外网通不通"为准：未认证时这个请求会被门户劫持成登录页，内容就对不上
+  // 网关确认在线后复核外网。未认证时这个请求可能被送回登录页。
   "connectivity_check_url": "http://www.msftconnecttest.com/connecttest.txt",
   "connectivity_expect": "Microsoft Connect Test",
   "connectivity_grace_seconds": 2,
@@ -72,7 +75,7 @@
   "lock_file": "login.lock",
   "lock_stale_seconds": 60,
 
-  // 完全没网络时主动让 Windows 去连这些 WiFi（只在"一个可用网络都没有"时才动手，不会抢已连上的网）
+  // 旧版流程可主动请求 Windows 连接 WiFi；wifi_interface 也用于识别物理网卡
   "wifi_nudge": true,
   "wifi_ssid": "SEU-ISP",
   "wifi_interface": "WLAN",
