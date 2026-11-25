@@ -6,7 +6,7 @@
 作用：开机 / 登录 Windows 后自动完成校园网认证，免去每次手动打开浏览器、输入一卡通号和密码、
       选择服务类型的步骤。账号和密码两个网络是同一个，写法按当前连的无线网络自动切换：
         SEU-WLAN → ",0,一卡通号"（无感知认证前缀，不带服务类型后缀）
-        SEU-ISP  → "一卡通号@cmcc"（中国电信 @dx、中国联通 @unicom）
+        SEU-ISP  → "一卡通号@cmcc"（中国电信 @telecom、中国联通 @unicom）
 
 原理：
   1. 直连探测认证门户（w.seu.edu.cn / 10.80.128.2 / 10.9.10.100，明确不走系统代理）
@@ -594,9 +594,10 @@ def nudge_wifi(cfg: dict, waited: float, last_nudge: list, ssids: list) -> None:
 
 CARRIERS = {
     "1": ("@cmcc", "中国移动"),
-    "2": ("@dx", "中国电信"),
+    "2": ("@telecom", "中国电信"),
     "3": ("@unicom", "中国联通"),
 }
+LEGACY_ISP_SUFFIXES = {"@dx": CARRIERS["2"][0], "@lt": CARRIERS["3"][0]}
 
 WIZARD_PROFILE_WLAN = """    {
       "ssid": "SEU-WLAN",         // 校园网：平时连的多数是这个
@@ -662,7 +663,7 @@ def first_run_wizard(force: bool = False) -> bool:
 
     if choice in CARRIERS:
         suffix, carrier = CARRIERS[choice]
-        isp_comment = "// 移动 @cmcc / 电信 @dx / 联通 @unicom"
+        isp_comment = "// 移动 @cmcc / 电信 @telecom / 联通 @unicom"
         isp_note = "运营商宽带（%s）" % carrier
     else:
         suffix, carrier = CARRIERS["1"]
@@ -970,8 +971,7 @@ def login_campus_wifi(cfg: dict, once: bool, lock: str = "") -> int:
                     creds = credentials_for(cfg, ssid)
                     if ssid == "SEU-ISP":
                         suffix = creds["suffix"].strip().casefold()
-                        if suffix == "@lt":
-                            suffix = CARRIERS["3"][0]
+                        suffix = LEGACY_ISP_SUFFIXES.get(suffix, suffix)
                         if suffix not in {carrier_suffix for carrier_suffix, _ in CARRIERS.values()}:
                             log(cfg, "SEU-ISP 缺少有效的运营商配置")
                             return 3

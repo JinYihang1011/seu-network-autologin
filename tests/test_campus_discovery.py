@@ -73,10 +73,11 @@ class CampusDiscoveryTests(unittest.TestCase):
         discover.assert_not_called()
         remember.assert_not_called()
 
-    def test_isp_accepts_current_and_legacy_unicom_suffixes(self):
-        self.assertEqual(login.CARRIERS["3"][0], "@unicom")
+    def test_isp_accepts_current_and_legacy_provider_suffixes(self):
+        self.assertEqual([login.CARRIERS[key][0] for key in ("1", "2", "3")], ["@cmcc", "@telecom", "@unicom"])
         routes = {"SEU-ISP": login.CAMPUS_DEFAULT_ROUTES["SEU-ISP"]}
-        for suffix in ("@unicom", "@lt"):
+        for suffix, expected in (("@cmcc", "@cmcc"), ("@unicom", "@unicom"), ("@lt", "@unicom"),
+                                 ("@telecom", "@telecom"), ("@dx", "@telecom")):
             with self.subTest(suffix=suffix):
                 cfg = {**self.cfg, "profiles": [{"ssid": "SEU-ISP", "isp_suffix": suffix}]}
                 read = Mock(return_value='{"result":1}')
@@ -87,7 +88,7 @@ class CampusDiscoveryTests(unittest.TestCase):
                     self.assertEqual(login.login_campus_wifi(cfg, once=True), 0)
                 read.assert_called_once()
                 query = parse_qs(urlsplit(read.call_args.args[1]).query)
-                self.assertEqual(query["user_account"], ["test@unicom"])
+                self.assertEqual(query["user_account"], [f"test{expected}"])
 
     def test_switching_to_wlan_before_submission_sends_no_credentials(self):
         read = Mock(return_value='{"result":0}')
