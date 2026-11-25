@@ -38,7 +38,8 @@
   // 默认门户配置下只对 SEU-WLAN 和 SEU-ISP 认证。设为 false 可使用旧版流程。
   "campus_wifi_only": true,
 
-  // 默认配置的 auto 使用 WLAN 802 / ISP 804；显式指定 portal / drcom 使用旧协议。
+  // 默认配置的 auto 会探测 ISP 入口，WLAN 从 802 起步；接口异常时可重新发现。
+  // 显式指定 portal / drcom 使用旧协议。
   "login_mode": "auto",
 
   // 旧版认证接口。默认流程使用各 SSID 的 HTTPS 接口。

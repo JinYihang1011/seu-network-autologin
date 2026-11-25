@@ -1,6 +1,7 @@
 config.json
 login.log
 login.lock
+campus_portal_cache.json
 __pycache__/
 *.pyc
 build/

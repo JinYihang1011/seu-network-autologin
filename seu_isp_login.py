@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing
+import gzip
+from html.parser import HTMLParser
 import http.client
+import io
 import json
 import os
 import re
@@ -35,7 +38,10 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
+from typing import NamedTuple
+import zlib
 from urllib import error as urlerror  # noqa: F401  (保留备用: 捕获 HTTPError/URLError)
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -686,7 +692,57 @@ CAMPUS_SSIDS = {"SEU-WLAN", "SEU-ISP"}
 CAMPUS_PORTAL_HOST = "w.seu.edu.cn"
 CAMPUS_PORTAL_IP = "10.80.128.2"
 CAMPUS_LOGIN_BASE = f"https://{CAMPUS_PORTAL_HOST}:802/eportal/"
-ISP_PORTAL_PORT = 804
+CAMPUS_CACHE_PATH = os.path.join(BASE_DIR, "campus_portal_cache.json")
+CAMPUS_BODY_LIMIT = 512 * 1024
+
+
+class CampusRoute(NamedTuple):
+    protocol: str
+    port: int
+
+
+CAMPUS_DEFAULT_ROUTES = {"SEU-WLAN": CampusRoute("classic", 802), "SEU-ISP": CampusRoute("portal", 804)}
+
+
+def load_campus_cache() -> dict[str, CampusRoute]:
+    try:
+        with open(CAMPUS_CACHE_PATH, encoding="utf-8") as handle:
+            data = json.loads(handle.read(8192))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    routes = {}
+    for ssid, value in data.items():
+        if ssid not in CAMPUS_SSIDS or not isinstance(value, dict):
+            continue
+        protocol, port = value.get("protocol"), value.get("port")
+        if type(port) is int and 1 <= port <= 65535 and (protocol == "portal" or (protocol == "classic" and port == 802)):
+            routes[ssid] = CampusRoute(protocol, port)
+    return routes
+
+
+def cache_campus_route(cfg: dict, cache: dict, ssid: str, route: CampusRoute) -> None:
+    if cache.get(ssid) == route:
+        return
+    updated = {**cache, ssid: route}
+    payload = {key: value._asdict() for key, value in updated.items()}
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=BASE_DIR, delete=False) as handle:
+            pending = handle.name
+            json.dump(payload, handle, indent=2)
+        os.replace(pending, CAMPUS_CACHE_PATH)
+        pending = None
+        cache[ssid] = route
+    except OSError:
+        log(cfg, f"{ssid} 认证入口缓存写入失败，下次运行将重新检测")
+    finally:
+        if pending:
+            try:
+                os.remove(pending)
+            except OSError:
+                pass
 
 
 def campus_source(cfg: dict) -> tuple[str, str, str] | None:
@@ -735,7 +791,79 @@ def campus_portal_get(port: int, path: str, source: str, timeout: float) -> str:
                 with connection.getresponse() as response:
                     if response.status != 200:
                         raise CampusPortalHTTPError(response.status)
-                    return decode_body(response.read(65536))
+                    body = response.read(CAMPUS_BODY_LIMIT + 1)
+                    if len(body) > CAMPUS_BODY_LIMIT:
+                        raise ValueError("Campus portal response is too large")
+                    if response.getheader("Content-Encoding", "").lower() == "gzip":
+                        try:
+                            with gzip.GzipFile(fileobj=io.BytesIO(body)) as compressed:
+                                body = compressed.read(CAMPUS_BODY_LIMIT + 1)
+                        except (OSError, EOFError, zlib.error) as exc:
+                            raise ValueError("Invalid compressed portal response") from exc
+                        if len(body) > CAMPUS_BODY_LIMIT:
+                            raise ValueError("Decompressed portal response is too large")
+                    return decode_body(body)
+
+
+class CampusScripts(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.paths = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "script":
+            return
+        src = dict(attrs).get("src")
+        if not src:
+            return
+        try:
+            url = urlparse.urlsplit(urlparse.urljoin(f"https://{CAMPUS_PORTAL_HOST}/", src))
+            if (url.scheme == "https" and url.hostname == CAMPUS_PORTAL_HOST and url.port in (None, 443)
+                    and url.username is None and re.fullmatch(r"/[A-Za-z0-9_./-]+\.js", url.path)):
+                if url.path not in self.paths:
+                    self.paths.append(url.path)
+        except ValueError:
+            pass
+
+
+class UnsupportedCampusPortal(ValueError):
+    pass
+
+
+def discover_campus_route(ssid: str, source: str, timeout: float) -> CampusRoute:
+    """仅解析已校验证书的校园网资源，不执行页面 JavaScript，也不发送凭据。"""
+    home = campus_portal_get(443, "/", source, timeout)
+    scripts = CampusScripts()
+    scripts.feed(home)
+    declaration = r"\benHTTPSPort\s*=\s*['\"]?([1-9]\d{0,4})['\"]?(?=\s*(?:[;,\r\n]|$))"
+    ports = set(re.findall(declaration, home))
+    # 旧版门户也可能通过内联脚本加载 a41.js。
+    for path in dict.fromkeys([*scripts.paths[:4], "/a41.js"]):
+        if ports:
+            break
+        try:
+            text = campus_portal_get(443, path, source, timeout)
+        except CampusPortalHTTPError as exc:
+            if exc.status == 404:
+                continue
+            raise
+        ports.update(re.findall(declaration, text))
+    if len(ports) != 1 or int(next(iter(ports))) > 65535:
+        raise ValueError("No unique HTTPS port declared by campus portal")
+    port = int(next(iter(ports)))
+    query = urlparse.urlencode({
+        "callback": "dr1003",
+        "wlan_user_ip": base64.b64encode(source.encode("ascii")).decode("ascii"),
+        "wlan_user_ssid": ssid,
+    })
+    body = campus_portal_get(port, f"/eportal/portal/page/loadConfig?{query}", source, timeout)
+    _, _, data = classify(body)
+    public = data.get("data") if isinstance(data, dict) and str(data.get("code")) == "1" else None
+    if not isinstance(public, dict):
+        raise ValueError("Unrecognized campus page configuration")
+    if str(public.get("login_method")) != "1" or str(public.get("en_md5", 0)).lower() in {"1", "true"}:
+        raise UnsupportedCampusPortal("Campus portal requires an unsupported login method")
+    return CampusRoute("portal", port)
 
 
 def campus_online(source: str, timeout: float) -> bool:
@@ -750,53 +878,91 @@ def campus_online(source: str, timeout: float) -> bool:
     return True
 
 
-def isp_online(source: str, mac: str, timeout: float) -> bool:
+def portal_online(port: int, source: str, mac: str, timeout: float) -> bool:
     query = urlparse.urlencode({
         "callback": "dr1003",
         "wlan_user_ip": base64.b64encode(source.encode("ascii")).decode("ascii"),
         "wlan_user_mac": mac,
         "login_method": "1",
     })
-    body = campus_portal_get(ISP_PORTAL_PORT, f"/eportal/portal/online_list?{query}", source, timeout)
+    body = campus_portal_get(port, f"/eportal/portal/online_list?{query}", source, timeout)
     _, _, data = classify(body)
     if not isinstance(data, dict) or str(data.get("result")) not in {"0", "1"}:
-        raise ValueError("Unrecognized ISP portal status")
+        raise ValueError("Unrecognized ePortal status")
     if str(data["result"]) == "0":
         return False
     entries = data.get("list")
     if not isinstance(entries, list):
-        raise ValueError("Missing ISP online records")
+        raise ValueError("Missing ePortal online records")
     return any(isinstance(item, dict) and item.get("online_ip") == source for item in entries)
 
 
-def campus_login_request(cfg: dict, ssid: str, source: str, mac: str, creds: dict) -> tuple[int, str]:
+def campus_route_online(route: CampusRoute, source: str, mac: str, timeout: float) -> bool:
+    if route.protocol == "classic":
+        return campus_online(source, timeout)
+    return portal_online(route.port, source, mac, timeout)
+
+
+def campus_login_request(cfg: dict, route: CampusRoute, source: str, mac: str, creds: dict) -> str:
     legacy = urlparse.urlsplit(build_portal_login_url(cfg, source, creds, CAMPUS_LOGIN_BASE))
-    if ssid == "SEU-WLAN":
-        return 802, f"{legacy.path}?{legacy.query}"
+    if route.protocol == "classic":
+        return f"{legacy.path}?{legacy.query}"
 
     # ISP 门户的 HTTPS 前端把认证方式 1 的请求发给 /eportal/portal/login。
     params = dict(urlparse.parse_qsl(legacy.query, keep_blank_values=True))
     params.pop("c")
     params.pop("a")
     params.update(login_method="1", wlan_user_mac=mac, jsVersion="4.X", operate="portal_login")
-    return ISP_PORTAL_PORT, f"/eportal/portal/login?{urlparse.urlencode(params)}"
+    return f"/eportal/portal/login?{urlparse.urlencode(params)}"
 
 
-def login_campus_wifi(cfg: dict, once: bool) -> int:
+def portal_error_reason(exc: Exception) -> str:
+    return f"HTTP {exc.status}" if isinstance(exc, CampusPortalHTTPError) else type(exc).__name__
+
+
+def should_rediscover(phase: str, exc: Exception) -> bool:
+    if isinstance(exc, CampusPortalHTTPError):
+        return exc.status in {301, 302, 303, 307, 308, 404, 405, 410, 421}
+    return isinstance(exc, (ValueError, ssl.SSLError, ConnectionRefusedError, http.client.HTTPException)) or (
+        phase == "查询在线状态" and isinstance(exc, OSError)
+    )
+
+
+def login_campus_wifi(cfg: dict, once: bool, lock: str = "") -> int:
     timeout = float(cfg.get("request_timeout_seconds", 4))
     login_timeout = float(cfg.get("login_timeout_seconds", 12))
     interval = max(2.0, float(cfg.get("retry_interval_seconds", 10)))
     deadline = time.monotonic() + (0.0 if once else float(cfg.get("max_wait_seconds", 300)))
+    cache = load_campus_cache()
+    routes = dict(cache)
+    refreshed = set()
+    portal_errors = (OSError, ValueError, http.client.HTTPException)
     while True:
+        touch_lock(lock)
         connection = campus_source(cfg)
         if connection is None:
             log(cfg, "当前未确认连接 SEU-WLAN 或 SEU-ISP，本次跳过")
             return 0
         ssid, source, mac = connection
         if source:
+            if ssid not in routes:
+                routes[ssid] = CAMPUS_DEFAULT_ROUTES[ssid]
+                if ssid == "SEU-ISP":
+                    try:
+                        routes[ssid] = discover_campus_route(ssid, source, timeout)
+                    except UnsupportedCampusPortal:
+                        log(cfg, f"{ssid} 门户需要新的认证方式，请使用网页认证")
+                        return 1
+                    except portal_errors as exc:
+                        log(cfg, f"{ssid} 入口发现暂不可用（{portal_error_reason(exc)}），使用默认入口检查")
+                    else:
+                        log(cfg, f"{ssid} 已从学校门户发现 HTTPS {routes[ssid].port} 认证入口")
+            route = routes[ssid]
+            touch_lock(lock)
             phase = "查询在线状态"
             try:
-                already_online = isp_online(source, mac, timeout) if ssid == "SEU-ISP" else campus_online(source, timeout)
+                already_online = campus_route_online(route, source, mac, timeout)
+                unknown_response = False
                 if not already_online:
                     if campus_source(cfg) != connection:
                         log(cfg, f"{ssid} 连接已变化，本次认证跳过")
@@ -805,34 +971,51 @@ def login_campus_wifi(cfg: dict, once: bool) -> int:
                     if ssid == "SEU-ISP" and creds["suffix"] not in {"@cmcc", "@dx", "@lt"}:
                         log(cfg, "SEU-ISP 缺少有效的运营商配置")
                         return 3
+                    touch_lock(lock)
                     phase = "提交认证"
-                    port, target = campus_login_request(cfg, ssid, source, mac, creds)
-                    body = campus_portal_get(port, target, source, login_timeout)
-                    state, _, data = classify(body)
+                    target = campus_login_request(cfg, route, source, mac, creds)
+                    body = campus_portal_get(route.port, target, source, login_timeout)
+                    state, _, _ = classify(body)
                     if state == "authfail":
                         log(cfg, f"{ssid} 门户拒绝认证")
                         return 2
-                    if ssid == "SEU-ISP" and not isinstance(data, dict):
-                        raise ValueError("Unrecognized login response")
+                    unknown_response = state == "unknown"
+                touch_lock(lock)
                 phase = "复核在线状态"
                 if campus_source(cfg) != connection:
                     log(cfg, f"{ssid} 连接已变化，本次复核跳过")
                     return 0
-                online = already_online
-                if not online:
-                    online = isp_online(source, mac, timeout) if ssid == "SEU-ISP" else campus_online(source, timeout)
+                online = already_online or campus_route_online(route, source, mac, timeout)
                 if online:
                     reachable, _ = connectivity_ok(cfg, timeout)
                     if reachable and campus_source(cfg) == connection:
+                        cache_campus_route(cfg, cache, ssid, route)
                         if already_online:
                             log(cfg, f"{ssid} 门户确认该网卡已在线，外网探测通过，无需重复认证")
                         else:
                             log(cfg, f"提交 {ssid} 认证后，门户确认该网卡在线，外网探测通过")
                         return 0
-            except (OSError, ValueError, http.client.HTTPException) as exc:
+                elif unknown_response:
+                    phase = "提交认证"
+                    raise ValueError("Unrecognized login response")
+            except portal_errors as exc:
                 # 异常消息或完整响应可能含登录 URL 或身份信息。
-                reason = f"HTTP {exc.status}" if isinstance(exc, CampusPortalHTTPError) else type(exc).__name__
-                log(cfg, f"{ssid} {phase}未通过（{reason}）")
+                log(cfg, f"{ssid} {phase}未通过（{portal_error_reason(exc)}）")
+                if ssid not in refreshed and should_rediscover(phase, exc):
+                    refreshed.add(ssid)
+                    touch_lock(lock)
+                    try:
+                        candidate = discover_campus_route(ssid, source, timeout)
+                    except UnsupportedCampusPortal:
+                        log(cfg, f"{ssid} 门户需要新的认证方式，请使用网页认证")
+                        return 1
+                    except portal_errors as discovery_error:
+                        log(cfg, f"{ssid} 重新发现认证入口失败（{portal_error_reason(discovery_error)}）")
+                    else:
+                        if candidate != route:
+                            routes[ssid] = candidate
+                            log(cfg, f"{ssid} 重新发现 HTTPS {candidate.port} 入口，先检查在线状态再尝试认证")
+                            continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             log(cfg, f"{ssid} 未能确认校园网认证和外网同时可用")
@@ -871,7 +1054,7 @@ def main(argv) -> int:
     )
     if use_campus_wifi:
         try:
-            return login_campus_wifi(cfg, once)
+            return login_campus_wifi(cfg, once, lock)
         finally:
             release_lock(lock)
 
